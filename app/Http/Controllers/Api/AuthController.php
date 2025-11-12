@@ -24,7 +24,7 @@ class AuthController extends Controller
     {
         if (Auth::attempt($request->only('email', 'password'))) {
             $token = auth()->user()->createToken("access-token");
-            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken])->response();
+            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken, 'user' => \auth()->user()])->response();
         }
         return $this->responseModifier->setMessage('Invalid credentials')->setResponseCode(401)->response();
     }
