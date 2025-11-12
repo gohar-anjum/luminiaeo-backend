@@ -19,36 +19,43 @@ class KeywordPlannerService
      */
     public function getKeywordIdeas(
         string $seedKeyword,
-        string $languageId = '1000',   // English
-        string $geoTargetId = '2840'   // USA
+        string $languageId = '1000', // English
+        string $geoTargetId = '2840' // USA
     ): array
     {
         $client = GoogleClientHelper::getGoogleAdsClient();
-        $keywordPlanIdeaServiceClient = $client->getKeywordPlanIdeaServiceClient();
+        $service = $client->getKeywordPlanIdeaServiceClient();
 
+        // Step 1: Define the keyword seed
         $keywordSeed = new KeywordSeed([
             'keywords' => [$seedKeyword],
         ]);
 
+        // Step 2: Build a valid GenerateKeywordIdeasRequest object
         $request = new GenerateKeywordIdeasRequest([
-            'customerId' => config('services.google.login_customer_id'),
+            'customer_id' => config('services.google.login_customer_id'),
             'language' => 'languageConstants/' . $languageId,
-            'geoTargetConstants' => ['geoTargetConstants/' . $geoTargetId],
-            'keywordPlanNetwork' => KeywordPlanNetwork::GOOGLE_SEARCH,
-            'keywordSeed' => $keywordSeed,
+            'geo_target_constants' => ['geoTargetConstants/' . $geoTargetId],
+            'keyword_plan_network' => KeywordPlanNetwork::GOOGLE_SEARCH,
+            'keyword_seed' => $keywordSeed,
         ]);
 
-        $response = $keywordPlanIdeaServiceClient->generateKeywordIdeas($request);
+        // Step 3: Call the API using the request object
+        $response = $service->generateKeywordIdeas($request);
 
+        // Step 4: Map results into a simplified array
         $ideas = [];
-        foreach ($response->getResults() as $result) {
+        foreach ($response->iterateAllElements() as $result) {
             $metrics = $result->getKeywordIdeaMetrics();
+
             $ideas[] = [
                 'text' => $result->getText(),
-                'avg_monthly_searches' => $metrics ? $metrics->getAvgMonthlySearches() : null,
-                'competition' => $metrics ? $metrics->getCompetition() : null,
-                'low_bid' => $metrics ? $metrics->getLowTopOfPageBidMicros() / 1_000_000 : null,
-                'high_bid' => $metrics ? $metrics->getHighTopOfPageBidMicros() / 1_000_000 : null,
+                'avg_monthly_searches' => $metrics?->getAvgMonthlySearches(),
+                'competition' => $metrics?->getCompetition(),
+                'low_bid' => $metrics && $metrics->getLowTopOfPageBidMicros()
+                    ? $metrics->getLowTopOfPageBidMicros() / 1_000_000 : null,
+                'high_bid' => $metrics && $metrics->getHighTopOfPageBidMicros()
+                    ? $metrics->getHighTopOfPageBidMicros() / 1_000_000 : null,
             ];
         }
 
