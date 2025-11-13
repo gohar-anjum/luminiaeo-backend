@@ -22,3 +22,4 @@ Route::prefix('keywords')->group(function () {
     Route::delete('/{id}', [KeywordController::class, 'destroy'])->name('keywords.destroy');
 });
 Route::get('/keyword-ideas', [KeywordPlannerController::class, 'getKeywordIdeas'])->middleware('auth:sanctum');
+Route::post('/keywords/data',[\App\Http\Controllers\Api\DataForSEO\DataForSEOController::class,'searchVolume']);

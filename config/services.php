@@ -43,5 +43,10 @@ return [
         'redirect_uri' => env('GOOGLE_ADS_REDIRECT_URI'),
     ],
 
+    'dataforseo' => [
+        'base_url' => env('DATAFORSEO_BASE_URL', 'https://api.dataforseo.com/v3'),
+        'login'    => env('DATAFORSEO_LOGIN'),
+        'password' => env('DATAFORSEO_PASSWORD'),
+    ],
 
 ];
