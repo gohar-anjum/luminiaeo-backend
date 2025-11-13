@@ -18,6 +18,9 @@ return new class extends Migration
             $table->string('domain')->nullable();
             $table->timestamps();
         });
+        Schema::table('keywords', function (Blueprint $table) {
+            $table->foreignId('project_id')->constrained('projects')->cascadeOnDelete();
+        });
 
     }
 

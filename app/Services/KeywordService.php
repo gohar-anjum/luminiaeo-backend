@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Interfaces\Repositories\KeywordRepositoryInterface;
+use App\Interfaces\KeywordRepositoryInterface;
 
 class KeywordService
 {

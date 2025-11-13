@@ -13,7 +13,6 @@ return new class extends Migration
     {
         Schema::create('keywords', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('project_id')->constrained()->cascadeOnDelete();
             $table->string('keyword');
             $table->integer('search_volume')->nullable();
             $table->float('competition')->nullable();

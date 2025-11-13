@@ -2,7 +2,7 @@
 
 namespace App\Repositories;
 
-use App\Interfaces\Repositories\KeywordRepositoryInterface;
+use App\Interfaces\KeywordRepositoryInterface;
 use App\Models\Keyword;
 
 class KeywordRepository implements KeywordRepositoryInterface
