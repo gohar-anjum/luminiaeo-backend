@@ -46,11 +46,6 @@ class BacklinksController extends Controller
             $pbnDetection = $payload['pbn_detection'] ?? [];
             $backlinks = $payload['backlinks']['items'] ?? $payload['backlinks'] ?? [];
 
-            Log::info('Backlinks fetched via live endpoint', [
-                'task_id' => $seoTask->task_id,
-                'domain' => $validated['domain'],
-                'items_count' => $payload['backlinks']['items_count'] ?? count($backlinks),
-            ]);
 
             return $this->responseModifier
                 ->setData([
@@ -66,43 +61,17 @@ class BacklinksController extends Controller
                 ->setMessage('Backlinks retrieved successfully')
                 ->response();
         } catch (PbnDetectorException $e) {
-            Log::error('PBN detector error in backlinks submit', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage($e->getMessage())
-                ->setResponseCode(502)
-                ->response();
+            Log::error('PBN detector error', ['error' => $e->getMessage()]);
+            return $this->responseModifier->setMessage($e->getMessage())->setResponseCode(502)->response();
         } catch (DataForSEOException $e) {
-            Log::error('DataForSEO error in backlinks submit', [
-                'error' => $e->getMessage(),
-                'error_code' => $e->getErrorCode(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage($e->getMessage())
-                ->setResponseCode($e->getStatusCode())
-                ->response();
+            Log::error('DataForSEO error', ['error' => $e->getMessage(), 'code' => $e->getErrorCode()]);
+            return $this->responseModifier->setMessage($e->getMessage())->setResponseCode($e->getStatusCode())->response();
         } catch (\Exception $e) {
-            Log::error('Unexpected error in backlinks submit', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage('An unexpected error occurred')
-                ->setResponseCode(500)
-                ->response();
+            Log::error('Unexpected error in backlinks submit', ['error' => $e->getMessage()]);
+            return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }
 
-    /**
-     * Retrieve backlinks results
-     *
-     * @param BacklinksResultsRequest $request
-     * @return JsonResponse
-     */
     public function results(BacklinksResultsRequest $request): JsonResponse
     {
         try {
@@ -130,34 +99,14 @@ class BacklinksController extends Controller
                 ->setMessage('Backlinks results retrieved successfully')
                 ->response();
         } catch (DataForSEOException $e) {
-            Log::error('DataForSEO error in backlinks results', [
-                'error' => $e->getMessage(),
-                'error_code' => $e->getErrorCode(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage($e->getMessage())
-                ->setResponseCode($e->getStatusCode())
-                ->response();
+            Log::error('DataForSEO error', ['error' => $e->getMessage()]);
+            return $this->responseModifier->setMessage($e->getMessage())->setResponseCode($e->getStatusCode())->response();
         } catch (\Exception $e) {
-            Log::error('Unexpected error in backlinks results', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage('An unexpected error occurred')
-                ->setResponseCode(500)
-                ->response();
+            Log::error('Unexpected error', ['error' => $e->getMessage()]);
+            return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }
 
-    /**
-     * Get task status
-     *
-     * @param BacklinksResultsRequest $request
-     * @return JsonResponse
-     */
     public function status(BacklinksResultsRequest $request): JsonResponse
     {
         try {
@@ -186,21 +135,11 @@ class BacklinksController extends Controller
                 ->setMessage('Task status retrieved successfully')
                 ->response();
         } catch (\Exception $e) {
-            Log::error('Unexpected error in backlinks status', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return $this->responseModifier
-                ->setMessage('An unexpected error occurred')
-                ->setResponseCode(500)
-                ->response();
+            Log::error('Unexpected error', ['error' => $e->getMessage()]);
+            return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }
 
-    /**
-     * Get harmful backlinks for a domain.
-     */
     public function harmful(BacklinksHarmfulRequest $request): JsonResponse
     {
         $validated = $request->validated();

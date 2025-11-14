@@ -36,7 +36,6 @@ class WhoisLookupService
     public function lookup(string $domain): array
     {
         if (!$this->enabled()) {
-            Log::warning('Whois lookup skipped: service not configured');
             return [];
         }
 
@@ -45,7 +44,7 @@ class WhoisLookupService
 
         return $this->cache->remember($cacheKey, $this->cacheTtl, function () use ($domain) {
             try {
-                $response = Http::timeout($this->timeout)
+                return Http::timeout($this->timeout)
                     ->acceptJson()
                     ->retry(2, 200)
                     ->get($this->baseUrl, [
@@ -55,15 +54,8 @@ class WhoisLookupService
                     ])
                     ->throw()
                     ->json();
-
-                return $response;
             } catch (RequestException $e) {
-                Log::error('WHOIS lookup failed', [
-                    'domain' => $domain,
-                    'error' => $e->getMessage(),
-                    'response' => $e->response?->json(),
-                ]);
-
+                Log::error('WHOIS lookup failed', ['domain' => $domain, 'error' => $e->getMessage()]);
                 return [];
             }
         });
@@ -79,6 +71,9 @@ class WhoisLookupService
         $registry = Arr::get($record, 'registryData', []);
         $domainName = Arr::get($record, 'domainName') ?? Arr::get($registry, 'domainName');
         $registrar = Arr::get($record, 'registrarName') ?? Arr::get($registry, 'registrarName');
+        if ($registrar && mb_strlen($registrar) > 255) {
+            $registrar = mb_substr($registrar, 0, 255);
+        }
         $estimatedAge = Arr::get($record, 'estimatedDomainAge');
         $dataError = Arr::get($record, 'dataError') ?? Arr::get($registry, 'dataError');
 
@@ -117,13 +112,8 @@ class WhoisLookupService
         }
 
         try {
-            $created = Carbon::parse($dateString);
-            return Carbon::now()->diffInDays($created);
+            return Carbon::now()->diffInDays(Carbon::parse($dateString));
         } catch (\Throwable $e) {
-            Log::warning('Unable to parse WHOIS created date', [
-                'value' => $dateString,
-                'error' => $e->getMessage(),
-            ]);
             return null;
         }
     }

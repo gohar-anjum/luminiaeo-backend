@@ -27,13 +27,11 @@ app = FastAPI(title=settings.app_name)
 @app.on_event("startup")
 async def on_startup() -> None:
     await init_cache()
-    logger.info("PBN detector started", environment=settings.environment)
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     await shutdown_cache()
-    logger.info("PBN detector stopped")
 
 
 @app.get("/health")
@@ -66,23 +64,20 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
                 for signal in peers
             ]
             content_similarity = content_similarity_service.detect_duplicates(snippets)
-        except Exception as e:
-            logger.error("Content similarity detection failed", error=str(e), exc_info=True)
+        except Exception:
             content_similarity = 0.0
 
         for backlink in peers:
             try:
                 features = feature_extractor.build_feature_vector(backlink, peers)
-                probability = classifier_service.predict_proba(features)
-            except Exception as e:
-                logger.error("Feature extraction or classification failed", error=str(e), source_url=str(backlink.source_url), exc_info=True)
-                probability = 0.5  # Default probability
+                probability = classifier_service.predict_proba(features, backlink)
+            except Exception:
+                probability = 0.5
 
             try:
                 rule_scores = rule_engine.evaluate(backlink, peers)
                 rules_boost = sum(rule_scores.values())
-            except Exception as e:
-                logger.error("Rule evaluation failed", error=str(e), source_url=str(backlink.source_url), exc_info=True)
+            except Exception:
                 rule_scores = {}
                 rules_boost = 0.0
 
@@ -91,7 +86,17 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
             if backlink.safe_browsing_status == "flagged":
                 rules_boost += 0.3
                 reasons.append("safe_browsing_flagged")
-            boosted_probability = min(probability + rules_boost + content_similarity * 0.1, 0.999)
+            
+            rule_weight = 0.3
+            content_weight = 0.15
+            normalized_rule_boost = min(rules_boost / 0.8, 1.0) if rules_boost > 0 else 0.0
+            
+            boosted_probability = (
+                probability * (1.0 - rule_weight - content_weight) +
+                normalized_rule_boost * rule_weight +
+                content_similarity * content_weight
+            )
+            boosted_probability = min(max(boosted_probability, 0.0), 0.999)
             risk = _risk_level(boosted_probability)
 
             if risk == "high":
@@ -119,12 +124,14 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
                         "rules": rule_scores,
                         "safe_browsing_status": backlink.safe_browsing_status,
                         "safe_browsing_threats": backlink.safe_browsing_threats,
+                        "backlink_spam_score": backlink.backlink_spam_score,
                     },
                 )
             )
 
         latency_ms = int((time.perf_counter() - start) * 1000)
-        meta = DetectionMeta(latency_ms=latency_ms, model_version="lr-1.0")
+        model_version = "lightweight-v1.0" if not classifier_service.use_ml_model else "lr-1.0"
+        meta = DetectionMeta(latency_ms=latency_ms, model_version=model_version)
 
         return BacklinkDetectionResponse(
             domain=request.domain,
