@@ -29,3 +29,5 @@ Homestead.json
 .phpactor.json
 auth.json
 /pbn-detector/.venv/*
+*/__pycache__/
+*.pyc

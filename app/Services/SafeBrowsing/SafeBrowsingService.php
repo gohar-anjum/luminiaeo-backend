@@ -44,18 +44,30 @@ class SafeBrowsingService
             try {
                 $response = Http::timeout($this->timeout)
                     ->acceptJson()
+                    ->withHeaders([
+                        'Content-Type' => 'application/json',
+                        'User-Agent' => 'Luminiaeo-Backend/1.0.0',
+                    ])
                     ->retry(2, 200)
-                    ->post($this->baseUrl . '?key=' . $this->apiKey, $payload)
+                    ->post($this->baseUrl . '?key=' . urlencode($this->apiKey), $payload)
                     ->throw()
                     ->json();
 
                 return $response;
             } catch (RequestException $e) {
-                Log::error('Safe Browsing lookup failed', [
-                    'url' => $url,
-                    'error' => $e->getMessage(),
-                    'response' => $e->response?->json(),
-                ]);
+                $errorResponse = $e->response?->json();
+                $statusCode = $e->response?->status();
+                
+                if ($statusCode === 403) {
+                    $errorReason = $errorResponse['error']['details'][0]['reason'] ?? null;
+                    if ($errorReason === 'API_KEY_HTTP_REFERRER_BLOCKED') {
+                        Log::error('Safe Browsing API key has HTTP referrer restrictions', ['url' => $url]);
+                    } else {
+                        Log::error('Safe Browsing API access denied', ['url' => $url, 'status_code' => $statusCode]);
+                    }
+                } else {
+                    Log::error('Safe Browsing lookup failed', ['url' => $url, 'error' => $e->getMessage()]);
+                }
 
                 return [];
             }

@@ -21,6 +21,7 @@ class BacklinkSignal(BaseModel):
     safe_browsing_status: Optional[str] = None
     safe_browsing_threats: Optional[List[dict[str, Any]]] = None
     safe_browsing_checked_at: Optional[datetime] = None
+    backlink_spam_score: Optional[int] = None  # DataForSEO spam score (0-100)
 
 
 class BacklinkDetectionRequest(BaseModel):

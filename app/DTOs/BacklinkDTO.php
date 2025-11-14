@@ -30,6 +30,7 @@ class BacklinkDTO
         public ?string $safeBrowsingStatus = null,
         public ?array $safeBrowsingThreats = null,
         public ?string $safeBrowsingCheckedAt = null,
+        public ?int $backlinkSpamScore = null,
     ) {}
 
     public static function fromArray(array $data, string $domain, string $taskId): self
@@ -55,6 +56,9 @@ class BacklinkDTO
             ?? null;
 
         $raw = $data;
+        $spamScore = isset($data['backlink_spam_score']) && is_numeric($data['backlink_spam_score']) 
+            ? (int)$data['backlink_spam_score'] 
+            : null;
 
         return new self(
             domain: $domain,
@@ -70,6 +74,7 @@ class BacklinkDTO
             lastSeen: $data['last_seen'] ?? null,
             isDofollow: $data['dofollow'] ?? null,
             linksCount: $data['links_count'] ?? null,
+            backlinkSpamScore: $spamScore,
         );
     }
 
@@ -80,7 +85,13 @@ class BacklinkDTO
         }
 
         $registrar = $signals['registrar'] ?? null;
-        $this->whoisRegistrar = is_array($registrar) ? null : ($registrar ? (string)$registrar : $this->whoisRegistrar);
+        if ($registrar && !is_array($registrar)) {
+            $registrar = (string)$registrar;
+            if (mb_strlen($registrar) > 255) {
+                $registrar = mb_substr($registrar, 0, 255);
+            }
+            $this->whoisRegistrar = $registrar;
+        }
         
         $domainAge = $signals['domain_age_days'] ?? null;
         $this->domainAgeDays = is_array($domainAge) ? null : ($domainAge ? (int)$domainAge : $this->domainAgeDays);
@@ -104,19 +115,14 @@ class BacklinkDTO
             ? $result['signals'] 
             : $this->pbnSignals;
         
-        // Note: PBN detector doesn't return asn, hosting_provider, or content_fingerprint
-        // These should be set from other sources (IP lookup, etc.) before detection
-        // We only update them if they're explicitly provided and valid
-        $signals = isset($result['signals']) && is_array($result['signals']) ? $result['signals'] : [];
+        $signals = $result['signals'] ?? [];
         
         if (isset($signals['asn']) && !is_array($signals['asn'])) {
             $this->asn = is_string($signals['asn']) || is_numeric($signals['asn']) ? (string)$signals['asn'] : $this->asn;
         }
-        
         if (isset($signals['hosting_provider']) && !is_array($signals['hosting_provider'])) {
             $this->hostingProvider = is_string($signals['hosting_provider']) ? $signals['hosting_provider'] : $this->hostingProvider;
         }
-        
         if (isset($signals['content_fingerprint']) && !is_array($signals['content_fingerprint'])) {
             $this->contentFingerprint = is_string($signals['content_fingerprint']) ? $signals['content_fingerprint'] : $this->contentFingerprint;
         }
@@ -157,57 +163,19 @@ class BacklinkDTO
             'safe_browsing_status' => $this->safeBrowsingStatus ?? 'unknown',
             'safe_browsing_threats' => $this->safeBrowsingThreats,
             'safe_browsing_checked_at' => $this->safeBrowsingCheckedAt,
+            'backlink_spam_score' => $this->backlinkSpamScore,
         ];
     }
 
     public function toDatabaseArray(): array
     {
-        $safeBrowsingCheckedAt = $this->safeBrowsingCheckedAt;
-        if (is_string($safeBrowsingCheckedAt) && !empty($safeBrowsingCheckedAt)) {
-            try {
-                $safeBrowsingCheckedAt = \Carbon\Carbon::parse($safeBrowsingCheckedAt);
-            } catch (\Exception $e) {
-                $safeBrowsingCheckedAt = null;
-            }
-        } elseif (!($safeBrowsingCheckedAt instanceof \DateTimeInterface)) {
-            $safeBrowsingCheckedAt = null;
-        }
+        $parseDate = fn($date) => is_string($date) && !empty($date) 
+            ? (function() use ($date) { try { return \Carbon\Carbon::parse($date); } catch (\Exception $e) { return null; } })()
+            : ($date instanceof \DateTimeInterface ? $date : null);
+        
+        $safeString = fn($val, $maxLength = null) => is_array($val) ? null : ($val !== null ? ($maxLength ? mb_substr((string)$val, 0, $maxLength) : (string)$val) : null);
 
-        // Ensure string fields are never arrays
-        $asn = $this->asn;
-        if (is_array($asn)) {
-            $asn = null;
-        } elseif ($asn !== null) {
-            $asn = (string)$asn;
-        }
-
-        $hostingProvider = $this->hostingProvider;
-        if (is_array($hostingProvider)) {
-            $hostingProvider = null;
-        } elseif ($hostingProvider !== null) {
-            $hostingProvider = (string)$hostingProvider;
-        }
-
-        $contentFingerprint = $this->contentFingerprint;
-        if (is_array($contentFingerprint)) {
-            $contentFingerprint = null;
-        } elseif ($contentFingerprint !== null) {
-            $contentFingerprint = (string)$contentFingerprint;
-        }
-
-        $ip = $this->ip;
-        if (is_array($ip)) {
-            $ip = null;
-        } elseif ($ip !== null) {
-            $ip = (string)$ip;
-        }
-
-        $whoisRegistrar = $this->whoisRegistrar;
-        if (is_array($whoisRegistrar)) {
-            $whoisRegistrar = null;
-        } elseif ($whoisRegistrar !== null) {
-            $whoisRegistrar = (string)$whoisRegistrar;
-        }
+        $safeBrowsingCheckedAt = $parseDate($this->safeBrowsingCheckedAt);
 
         return [
             'domain' => (string)$this->domain,
@@ -218,12 +186,12 @@ class BacklinkDTO
             'domain_rank' => $this->domainRank,
             'task_id' => (string)$this->taskId,
             'updated_at' => now(),
-            'ip' => $ip,
-            'asn' => $asn,
-            'hosting_provider' => $hostingProvider,
-            'whois_registrar' => $whoisRegistrar,
+            'ip' => $safeString($this->ip),
+            'asn' => $safeString($this->asn),
+            'hosting_provider' => $safeString($this->hostingProvider),
+            'whois_registrar' => $safeString($this->whoisRegistrar, 255),
             'domain_age_days' => $this->domainAgeDays,
-            'content_fingerprint' => $contentFingerprint,
+            'content_fingerprint' => $safeString($this->contentFingerprint, 191),
             'pbn_probability' => $this->pbnProbability,
             'risk_level' => $this->riskLevel ? (string)$this->riskLevel : 'unknown',
             'pbn_reasons' => is_array($this->pbnReasons) ? $this->pbnReasons : null,

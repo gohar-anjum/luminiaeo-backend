@@ -9,6 +9,13 @@ from loguru import logger
 from sklearn.linear_model import LogisticRegression
 
 from app.config import get_settings
+from app.schemas import BacklinkSignal
+
+# Import lightweight classifier as fallback
+try:
+    from app.services.lightweight_classifier import lightweight_classifier
+except ImportError:
+    lightweight_classifier = None
 
 
 class ClassifierService:
@@ -16,25 +23,35 @@ class ClassifierService:
         self.settings = get_settings()
         self.model_path = Path(self.settings.classifier_model_path)
         self.model: LogisticRegression | None = None
+        self.use_ml_model = False
 
     def load(self) -> None:
         if self.model:
             return
-        if not self.model_path.exists():
-            logger.warning("Classifier model not found at {}", self.model_path)
-            self.model = LogisticRegression()
-            self.model.coef_ = np.zeros((1, 8))
-            self.model.intercept_ = np.zeros(1)
-            self.model.classes_ = np.array([0, 1])
-            return
-        self.model = joblib.load(self.model_path)
+        
+        if self.model_path.exists():
+            try:
+                self.model = joblib.load(self.model_path)
+                self.use_ml_model = True
+                return
+            except Exception:
+                pass
+        
+        self.use_ml_model = False
 
-    def predict_proba(self, features: np.ndarray) -> float:
+    def predict_proba(self, features: np.ndarray, backlink: BacklinkSignal | None = None) -> float:
         self.load()
-        if not self.model:
-            return 0.0
-        probability = float(self.model.predict_proba([features])[0][1])
-        return probability
+        
+        if self.use_ml_model and self.model:
+            try:
+                return float(self.model.predict_proba([features])[0][1])
+            except Exception:
+                pass
+        
+        if lightweight_classifier and backlink:
+            return lightweight_classifier.predict_proba(features, backlink)
+        
+        return 0.5
 
 
 classifier_service = ClassifierService()
