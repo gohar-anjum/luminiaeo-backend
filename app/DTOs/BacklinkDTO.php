@@ -58,7 +58,9 @@ class BacklinkDTO
         $raw = $data;
         $spamScore = isset($data['backlink_spam_score']) && is_numeric($data['backlink_spam_score']) 
             ? (int)$data['backlink_spam_score'] 
-            : null;
+            : (isset($data['url_to_spam_score']) && is_numeric($data['url_to_spam_score'])
+                ? (int)$data['url_to_spam_score']
+                : null);
 
         return new self(
             domain: $domain,
@@ -199,6 +201,7 @@ class BacklinkDTO
             'safe_browsing_status' => $this->safeBrowsingStatus ? (string)$this->safeBrowsingStatus : 'unknown',
             'safe_browsing_threats' => is_array($this->safeBrowsingThreats) ? $this->safeBrowsingThreats : null,
             'safe_browsing_checked_at' => $safeBrowsingCheckedAt,
+            'backlink_spam_score' => $this->backlinkSpamScore,
         ];
     }
 }

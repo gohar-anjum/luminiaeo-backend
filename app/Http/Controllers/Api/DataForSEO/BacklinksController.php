@@ -44,7 +44,13 @@ class BacklinksController extends Controller
             $payload = $seoTask->result ?? [];
             $summary = $payload['summary'] ?? [];
             $pbnDetection = $payload['pbn_detection'] ?? [];
-            $backlinks = $payload['backlinks']['items'] ?? $payload['backlinks'] ?? [];
+
+            $backlinks = [];
+            if (isset($payload['backlinks']['items']) && is_array($payload['backlinks']['items'])) {
+                $backlinks = $payload['backlinks']['items'];
+            } elseif (isset($payload['backlinks']) && is_array($payload['backlinks'])) {
+                $backlinks = $payload['backlinks'];
+            }
 
 
             return $this->responseModifier
