@@ -137,7 +137,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
         $cachedTask = SeoTask::where('domain', $domain)
             ->where('type', SeoTask::TYPE_BACKLINKS)
             ->where('status', SeoTask::STATUS_COMPLETED)
-            ->where('completed_at', '>=', now()->subHours(24))
+            ->where('completed_at', '>=', now()->subDays(10))
             ->whereJsonContains('payload->limit', $limit)
             ->orderByDesc('completed_at')
             ->first();
@@ -204,11 +204,11 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             }
 
             $entry = $dto->toDatabaseArray();
-            
+
             $entry['pbn_reasons'] = is_array($entry['pbn_reasons'] ?? null) ? json_encode($entry['pbn_reasons'], JSON_UNESCAPED_UNICODE) : null;
             $entry['pbn_signals'] = is_array($entry['pbn_signals'] ?? null) ? json_encode($entry['pbn_signals'], JSON_UNESCAPED_UNICODE) : null;
             $entry['safe_browsing_threats'] = is_array($entry['safe_browsing_threats'] ?? null) ? json_encode($entry['safe_browsing_threats'], JSON_UNESCAPED_UNICODE) : null;
-            
+
             foreach ($stringFields as $field) {
                 if (isset($entry[$field]) && is_array($entry[$field])) {
                     $entry[$field] = null;
@@ -222,7 +222,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                     $entry[$field] = mb_substr($entry[$field], 0, 191);
                 }
             }
-            
+
             if ($isInsert) {
                 $entry['created_at'] = now();
             }
@@ -237,7 +237,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             'anchor', 'link_type', 'source_domain', 'domain_rank', 'ip', 'asn', 'hosting_provider',
             'whois_registrar', 'domain_age_days', 'content_fingerprint', 'pbn_probability', 'risk_level',
             'pbn_reasons', 'pbn_signals', 'safe_browsing_status', 'safe_browsing_threats',
-            'safe_browsing_checked_at', 'updated_at',
+            'safe_browsing_checked_at', 'backlink_spam_score', 'updated_at',
         ]);
     }
 

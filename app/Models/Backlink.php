@@ -28,6 +28,7 @@ class Backlink extends Model
         'safe_browsing_status',
         'safe_browsing_threats',
         'safe_browsing_checked_at',
+        'backlink_spam_score',
     ];
 
     protected $casts = [

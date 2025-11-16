@@ -40,7 +40,6 @@ class PbnDetectorService
             'backlinks' => $backlinks,
             'summary' => $summary,
         ];
-
         $cacheKey = sprintf('pbn_detection:%s', md5($taskId . $domain));
 
         if (Cache::has($cacheKey)) {

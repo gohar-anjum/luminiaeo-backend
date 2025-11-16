@@ -45,12 +45,32 @@ class ClassifierService:
         if self.use_ml_model and self.model:
             try:
                 return float(self.model.predict_proba([features])[0][1])
-            except Exception:
+            except Exception as e:
+                logger.warning("ML model prediction failed", error=str(e))
                 pass
         
         if lightweight_classifier and backlink:
-            return lightweight_classifier.predict_proba(features, backlink)
+            try:
+                result = lightweight_classifier.predict_proba(features, backlink)
+                logger.info("Lightweight classifier result", 
+                           probability=result, 
+                           features_len=len(features),
+                           spam_score=backlink.backlink_spam_score,
+                           domain_rank=backlink.domain_rank,
+                           backlink=str(backlink.source_url))
+                return result
+            except Exception as e:
+                logger.error("Lightweight classifier failed", 
+                           error=str(e), 
+                           features_len=len(features),
+                           backlink=str(backlink.source_url) if backlink else None,
+                           exc_info=True)
         
+        logger.warning("Classifier falling back to default 0.5", 
+                      use_ml_model=self.use_ml_model,
+                      has_lightweight=lightweight_classifier is not None,
+                      has_backlink=backlink is not None,
+                      features_len=len(features) if 'features' in locals() else None)
         return 0.5
 
 

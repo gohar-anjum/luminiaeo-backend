@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import bisect
 import numpy as np
+from typing import List, Tuple
 
 from app.schemas import BacklinkSignal
 
@@ -27,13 +29,61 @@ class LightweightClassifier:
             'registrar_reuse_high': 0.3,
             'velocity_high': 0.5,
         }
+        
+        # Precomputed lookup tables for O(log n) threshold checks
+        self._domain_rank_lookup = self._build_domain_rank_lookup()
+        self._domain_age_lookup = self._build_domain_age_lookup()
+        self._ip_reuse_lookup = self._build_ip_reuse_lookup()
+        self._registrar_reuse_lookup = self._build_registrar_reuse_lookup()
+        self._link_velocity_lookup = self._build_link_velocity_lookup()
+    
+    def _build_domain_rank_lookup(self) -> Tuple[List[float], List[float]]:
+        """Build lookup table for domain rank scoring"""
+        thresholds = [0.0, 100.0, 500.0, 1000.0, float('inf')]
+        scores = [0.5, 0.9, 0.6, 0.3, 0.1]
+        return thresholds, scores
+    
+    def _build_domain_age_lookup(self) -> Tuple[List[float], List[float]]:
+        """Build lookup table for domain age scoring"""
+        thresholds = [0.0, 365.0, 1095.0, 3650.0, float('inf')]
+        scores = [0.5, 0.9, 0.6, 0.3, 0.1]
+        return thresholds, scores
+    
+    def _build_ip_reuse_lookup(self) -> Tuple[List[float], List[float]]:
+        """Build lookup table for IP reuse scoring"""
+        thresholds = [0.0, 0.1, 0.2, 0.3, float('inf')]
+        scores = [0.1, 0.3, 0.6, 0.9, 0.9]
+        return thresholds, scores
+    
+    def _build_registrar_reuse_lookup(self) -> Tuple[List[float], List[float]]:
+        """Build lookup table for registrar reuse scoring"""
+        thresholds = [0.0, 0.1, 0.2, 0.3, float('inf')]
+        scores = [0.1, 0.3, 0.5, 0.8, 0.8]
+        return thresholds, scores
+    
+    def _build_link_velocity_lookup(self) -> Tuple[List[float], List[float]]:
+        """Build lookup table for link velocity scoring"""
+        thresholds = [0.0, 0.1, 0.3, 0.5, float('inf')]
+        scores = [0.1, 0.3, 0.5, 0.8, 0.8]
+        return thresholds, scores
+    
+    def _score_with_lookup(self, value: float, thresholds: List[float], scores: List[float]) -> float:
+        """O(log n) binary search instead of O(n) if-else chain"""
+        idx = bisect.bisect_left(thresholds, value)
+        return scores[idx] if idx < len(scores) else scores[-1]
     
     def predict_proba(self, features: np.ndarray, backlink: BacklinkSignal) -> float:
+        # Ensure we have exactly 11 features
         if len(features) == 8:
+            # Legacy 8-feature format: add missing features
             features = np.append(features, [0.0, 0.0, 0.5])
         elif len(features) == 10:
+            # Legacy 10-feature format: add spam score
             features = np.append(features, [0.5])
         elif len(features) != 11:
+            # Invalid feature count - log and return default
+            from loguru import logger
+            logger.error(f"Invalid feature vector length: {len(features)}, expected 11")
             return 0.5
         
         anchor_length, money_anchor, domain_rank, dofollow, domain_age, \
@@ -42,54 +92,21 @@ class LightweightClassifier:
         
         scores = {}
         
-        if domain_rank <= 0:
-            scores['domain_rank'] = 0.5
-        elif domain_rank < self.thresholds['domain_rank_low']:
-            scores['domain_rank'] = 0.9
-        elif domain_rank < self.thresholds['domain_rank_medium']:
-            scores['domain_rank'] = 0.6
-        elif domain_rank < 1000:
-            scores['domain_rank'] = 0.3
-        else:
-            scores['domain_rank'] = 0.1
+        # Use optimized lookup tables - O(log n) instead of O(n) if-else chains
+        thresholds, score_values = self._domain_rank_lookup
+        scores['domain_rank'] = self._score_with_lookup(domain_rank, thresholds, score_values)
         
-        if domain_age <= 0:
-            scores['domain_age'] = 0.5
-        elif domain_age < self.thresholds['domain_age_new']:
-            scores['domain_age'] = 0.9
-        elif domain_age < self.thresholds['domain_age_young']:
-            scores['domain_age'] = 0.6
-        elif domain_age < 3650:
-            scores['domain_age'] = 0.3
-        else:
-            scores['domain_age'] = 0.1
+        thresholds, score_values = self._domain_age_lookup
+        scores['domain_age'] = self._score_with_lookup(domain_age, thresholds, score_values)
         
-        if ip_reuse >= self.thresholds['ip_reuse_high']:
-            scores['ip_reuse'] = 0.9
-        elif ip_reuse >= 0.2:
-            scores['ip_reuse'] = 0.6
-        elif ip_reuse >= 0.1:
-            scores['ip_reuse'] = 0.3
-        else:
-            scores['ip_reuse'] = 0.1
+        thresholds, score_values = self._ip_reuse_lookup
+        scores['ip_reuse'] = self._score_with_lookup(ip_reuse, thresholds, score_values)
         
-        if registrar_reuse >= self.thresholds['registrar_reuse_high']:
-            scores['registrar_reuse'] = 0.8
-        elif registrar_reuse >= 0.2:
-            scores['registrar_reuse'] = 0.5
-        elif registrar_reuse >= 0.1:
-            scores['registrar_reuse'] = 0.3
-        else:
-            scores['registrar_reuse'] = 0.1
+        thresholds, score_values = self._registrar_reuse_lookup
+        scores['registrar_reuse'] = self._score_with_lookup(registrar_reuse, thresholds, score_values)
         
-        if link_velocity >= self.thresholds['velocity_high']:
-            scores['link_velocity'] = 0.8
-        elif link_velocity >= 0.3:
-            scores['link_velocity'] = 0.5
-        elif link_velocity >= 0.1:
-            scores['link_velocity'] = 0.3
-        else:
-            scores['link_velocity'] = 0.1
+        thresholds, score_values = self._link_velocity_lookup
+        scores['link_velocity'] = self._score_with_lookup(link_velocity, thresholds, score_values)
         
         if money_anchor > 0:
             scores['anchor_quality'] = 0.9
@@ -130,7 +147,135 @@ class LightweightClassifier:
         if composite_boosts['spam_network']:
             base_probability *= 1.25
         
+        # Additional boost for very high spam scores (even without clustering)
+        if spam_score_normalized > 0.7:
+            base_probability += 0.15  # Direct boost for high spam
+        elif spam_score_normalized > 0.5:
+            base_probability += 0.10  # Moderate boost for medium-high spam
+        
+        # Additional boost for very low domain ranks (high risk indicator)
+        if domain_rank < 10:
+            base_probability += 0.10  # Very low rank = high risk
+        elif domain_rank < 50:
+            base_probability += 0.05  # Low rank = moderate risk
+        
         return float(max(0.0, min(1.0, base_probability)))
+    
+    def predict_proba_batch(
+        self, 
+        features_matrix: np.ndarray, 
+        backlinks: List[BacklinkSignal]
+    ) -> np.ndarray:
+        """
+        Vectorized batch processing for multiple backlinks.
+        Much faster than processing one by one.
+        """
+        if len(features_matrix) != len(backlinks):
+            raise ValueError("Features matrix and backlinks must have same length")
+        
+        if len(features_matrix) == 0:
+            return np.array([])
+        
+        # Ensure all feature vectors have 11 features
+        if features_matrix.shape[1] != 11:
+            # Pad or truncate as needed
+            if features_matrix.shape[1] < 11:
+                padding = np.zeros((features_matrix.shape[0], 11 - features_matrix.shape[1]))
+                features_matrix = np.hstack([features_matrix, padding])
+            else:
+                features_matrix = features_matrix[:, :11]
+        
+        # Vectorized feature extraction
+        domain_ranks = features_matrix[:, 2]
+        domain_ages = features_matrix[:, 4]
+        ip_reuses = features_matrix[:, 5]
+        registrar_reuses = features_matrix[:, 6]
+        link_velocities = features_matrix[:, 7]
+        money_anchors = features_matrix[:, 1]
+        domain_name_suspicious = features_matrix[:, 8]
+        spam_scores = features_matrix[:, 10]
+        
+        # Vectorized scoring using np.select (faster than loops)
+        domain_rank_scores = np.select(
+            [
+                domain_ranks <= 0,
+                domain_ranks < 100,
+                domain_ranks < 500,
+                domain_ranks < 1000
+            ],
+            [0.5, 0.9, 0.6, 0.3],
+            default=0.1
+        )
+        
+        domain_age_scores = np.select(
+            [
+                domain_ages <= 0,
+                domain_ages < 365,
+                domain_ages < 1095,
+                domain_ages < 3650
+            ],
+            [0.5, 0.9, 0.6, 0.3],
+            default=0.1
+        )
+        
+        ip_reuse_scores = np.select(
+            [
+                ip_reuses >= 0.3,
+                ip_reuses >= 0.2,
+                ip_reuses >= 0.1
+            ],
+            [0.9, 0.6, 0.3],
+            default=0.1
+        )
+        
+        registrar_reuse_scores = np.select(
+            [
+                registrar_reuses >= 0.3,
+                registrar_reuses >= 0.2,
+                registrar_reuses >= 0.1
+            ],
+            [0.8, 0.5, 0.3],
+            default=0.1
+        )
+        
+        link_velocity_scores = np.select(
+            [
+                link_velocities >= 0.5,
+                link_velocities >= 0.3,
+                link_velocities >= 0.1
+            ],
+            [0.8, 0.5, 0.3],
+            default=0.1
+        )
+        
+        # Base probability calculation (vectorized)
+        base_probabilities = (
+            domain_rank_scores * self.weights['domain_rank'] +
+            domain_age_scores * self.weights['domain_age'] +
+            ip_reuse_scores * self.weights['ip_reuse'] +
+            registrar_reuse_scores * self.weights['registrar_reuse'] +
+            link_velocity_scores * self.weights['link_velocity'] +
+            domain_name_suspicious * 0.08 +
+            spam_scores * 0.20
+        )
+        
+        # Composite signal boosts (vectorized)
+        high_risk_network = (domain_ranks < 500) & ((ip_reuses > 0.3) | (registrar_reuses > 0.3))
+        new_domain_cluster = (domain_ages < 365) & ((ip_reuses > 0.2) | (registrar_reuses > 0.2)) & (link_velocities > 0.4)
+        spam_network = (spam_scores > 0.7) | ((spam_scores > 0.6) & ((ip_reuses > 0.2) | (registrar_reuses > 0.2)))
+        
+        base_probabilities[high_risk_network] *= 1.2
+        base_probabilities[new_domain_cluster] *= 1.15
+        base_probabilities[spam_network] *= 1.25
+        
+        # Additional boosts (vectorized)
+        base_probabilities[spam_scores > 0.7] += 0.15
+        base_probabilities[(spam_scores > 0.5) & (spam_scores <= 0.7)] += 0.10
+        base_probabilities[domain_ranks < 10] += 0.10
+        base_probabilities[(domain_ranks >= 10) & (domain_ranks < 50)] += 0.05
+        
+        # Clip to [0, 1]
+        return np.clip(base_probabilities, 0.0, 1.0)
     
     def _compute_composite_signals(
         self, domain_rank: float, domain_age: float, ip_reuse: float,
@@ -161,6 +306,10 @@ class LightweightClassifier:
         
         # Very high spam score: DataForSEO indicates high spam risk
         if spam_score > 0.8:
+            signals['spam_network'] = True
+        
+        # High spam score without clustering: Still a risk signal
+        if spam_score > 0.7:
             signals['spam_network'] = True
         
         return signals

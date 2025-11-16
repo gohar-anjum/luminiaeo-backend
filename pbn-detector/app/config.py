@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     minhash_threshold: float = 0.8
     high_risk_threshold: float = 0.75
     medium_risk_threshold: float = 0.5
+    use_ensemble: bool = True
+    use_enhanced_features: bool = True
+    use_parallel_processing: bool = True
+    parallel_workers: int = 4
 
     class Config:
         env_file = ".env"
