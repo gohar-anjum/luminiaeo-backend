@@ -427,11 +427,11 @@ cd pbn-detector
 # Activate the Poetry virtual environment (if not already activated)
 poetry shell 
 #alternate 
-source .venv/bin/activate  # Linux/Mac
+source ./.venv/bin/activate  # Linux/Mac
 .venv\Scripts\activate     # Windows
 
 # Development mode with auto-reload
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 9000
 
 # Production mode
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
@@ -492,8 +492,6 @@ LOG_LEVEL=INFO
 REDIS_URL=redis://localhost:6379/0
 
 # External APIs (optional)
-WHOIS_BASE_URL=https://www.whoisxmlapi.com/whoisserver/WhoisService
-WHOIS_API_KEY=your_whois_api_key
 IPINFO_TOKEN=your_ipinfo_token
 
 # Model Configuration
@@ -519,8 +517,6 @@ PARALLEL_WORKERS=4
 | `ENVIRONMENT` | string | "development" | Environment (development/production) |
 | `LOG_LEVEL` | string | "INFO" | Logging level |
 | `REDIS_URL` | string | None | Redis connection URL (optional) |
-| `WHOIS_BASE_URL` | string | - | WHOIS API base URL (optional) |
-| `WHOIS_API_KEY` | string | None | WHOIS API key (optional) |
 | `IPINFO_TOKEN` | string | None | IPInfo API token (optional) |
 | `CLASSIFIER_MODEL_PATH` | string | "models/pbn_lr.joblib" | Path to trained ML model |
 | `MINHASH_THRESHOLD` | float | 0.8 | Content similarity threshold |
