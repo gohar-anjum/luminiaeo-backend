@@ -425,7 +425,10 @@ poetry run uvicorn app.main:app --reload
 cd pbn-detector
 
 # Activate the Poetry virtual environment (if not already activated)
-poetry shell
+poetry shell 
+#alternate 
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
 
 # Development mode with auto-reload
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
