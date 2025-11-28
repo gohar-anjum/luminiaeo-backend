@@ -2,63 +2,88 @@
 
 namespace App\Services\Google;
 
+use App\DTOs\KeywordDataDTO;
 use App\Helpers\GoogleClientHelper;
 use Google\Ads\GoogleAds\V19\Enums\KeywordPlanNetworkEnum\KeywordPlanNetwork;
 use Google\Ads\GoogleAds\V19\Services\GenerateKeywordIdeasRequest;
 use Google\Ads\GoogleAds\V19\Services\KeywordSeed;
+use Illuminate\Support\Facades\Log;
 
 class KeywordPlannerService
 {
-    /**
-     * Fetch keyword ideas from Google Keyword Planner API (v19)
-     *
-     * @param string $seedKeyword
-     * @param string $languageId
-     * @param string $geoTargetId
-     * @return array
-     */
     public function getKeywordIdeas(
         string $seedKeyword,
         string $languageId = '1000', // English
-        string $geoTargetId = '2840' // USA
-    ): array
-    {
-        $client = GoogleClientHelper::getGoogleAdsClient();
-        $service = $client->getKeywordPlanIdeaServiceClient();
+        string $geoTargetId = '2840', // USA
+        ?int $maxResults = null
+    ): array {
+        try {
+            $client = GoogleClientHelper::getGoogleAdsClient();
+            $service = $client->getKeywordPlanIdeaServiceClient();
 
-        // Step 1: Define the keyword seed
-        $keywordSeed = new KeywordSeed([
-            'keywords' => [$seedKeyword],
-        ]);
+            $keywordSeed = new KeywordSeed([
+                'keywords' => [$seedKeyword],
+            ]);
 
-        // Step 2: Build a valid GenerateKeywordIdeasRequest object
-        $request = new GenerateKeywordIdeasRequest([
-            'customer_id' => config('services.google.login_customer_id'),
-            'language' => 'languageConstants/' . $languageId,
-            'geo_target_constants' => ['geoTargetConstants/' . $geoTargetId],
-            'keyword_plan_network' => KeywordPlanNetwork::GOOGLE_SEARCH,
-            'keyword_seed' => $keywordSeed,
-        ]);
+            $request = new GenerateKeywordIdeasRequest([
+                'customer_id' => config('services.google.login_customer_id'),
+                'language' => 'languageConstants/' . $languageId,
+                'geo_target_constants' => ['geoTargetConstants/' . $geoTargetId],
+                'keyword_plan_network' => KeywordPlanNetwork::GOOGLE_SEARCH,
+                'keyword_seed' => $keywordSeed,
+            ]);
 
-        // Step 3: Call the API using the request object
-        $response = $service->generateKeywordIdeas($request);
+            $response = $service->generateKeywordIdeas($request);
 
-        // Step 4: Map results into a simplified array
-        $ideas = [];
-        foreach ($response->iterateAllElements() as $result) {
-            $metrics = $result->getKeywordIdeaMetrics();
+            $ideas = [];
+            $count = 0;
+            
+            foreach ($response->iterateAllElements() as $result) {
+                if ($maxResults && $count >= $maxResults) {
+                    break;
+                }
 
-            $ideas[] = [
-                'text' => $result->getText(),
-                'avg_monthly_searches' => $metrics?->getAvgMonthlySearches(),
-                'competition' => $metrics?->getCompetition(),
-                'low_bid' => $metrics && $metrics->getLowTopOfPageBidMicros()
-                    ? $metrics->getLowTopOfPageBidMicros() / 1_000_000 : null,
-                'high_bid' => $metrics && $metrics->getHighTopOfPageBidMicros()
-                    ? $metrics->getHighTopOfPageBidMicros() / 1_000_000 : null,
-            ];
+                $metrics = $result->getKeywordIdeaMetrics();
+                $keywordText = $result->getText();
+
+                $competitionValue = null;
+                if ($metrics && $metrics->getCompetition()) {
+                    $competitionEnum = $metrics->getCompetition();
+                    $competitionValue = match ($competitionEnum) {
+                        1 => 0.0, // LOW
+                        2 => 0.5, // MEDIUM
+                        3 => 1.0, // HIGH
+                        default => null,
+                    };
+                }
+
+                $ideas[] = new KeywordDataDTO(
+                    keyword: $keywordText,
+                    source: 'google_planner',
+                    searchVolume: $metrics?->getAvgMonthlySearches(),
+                    competition: $competitionValue,
+                    cpc: $metrics && $metrics->getLowTopOfPageBidMicros()
+                        ? ($metrics->getLowTopOfPageBidMicros() + ($metrics->getHighTopOfPageBidMicros() ?? $metrics->getLowTopOfPageBidMicros())) / 2_000_000
+                        : null,
+                );
+
+                $count++;
+            }
+
+            Log::info('Google Keyword Planner API success', [
+                'seed_keyword' => $seedKeyword,
+                'keywords_found' => count($ideas),
+            ]);
+
+            return $ideas;
+        } catch (\Throwable $e) {
+            Log::error('Google Keyword Planner API error', [
+                'seed_keyword' => $seedKeyword,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return [];
         }
-
-        return $ideas;
     }
 }

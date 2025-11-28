@@ -24,18 +24,11 @@ class BacklinksController extends Controller
         $this->responseModifier = $responseModifier;
     }
 
-    /**
-     * Submit backlinks retrieval task
-     *
-     * @param BacklinksSubmitRequest $request
-     * @return JsonResponse
-     */
     public function submit(BacklinksSubmitRequest $request): JsonResponse
     {
         try {
             $validated = $request->validated();
 
-            // Create task and receive results immediately (live endpoint)
             $seoTask = $this->repository->createTask(
                 $validated['domain'],
                 $validated['limit'] ?? 100
@@ -83,7 +76,6 @@ class BacklinksController extends Controller
         try {
             $validated = $request->validated();
 
-            // Get task status
             $seoTask = $this->repository->getTaskStatus($validated['task_id']);
 
             if (!$seoTask) {

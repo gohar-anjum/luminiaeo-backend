@@ -22,9 +22,8 @@ class DataForSEOService
         $this->baseUrl = config('services.dataforseo.base_url');
         $this->login = config('services.dataforseo.login');
         $this->password = config('services.dataforseo.password');
-        $this->cacheTTL = config('services.dataforseo.cache_ttl', 86400); // 24 hours default
+        $this->cacheTTL = config('services.dataforseo.cache_ttl', 86400);
 
-        // Validate configuration
         if (empty($this->baseUrl) || empty($this->login) || empty($this->password)) {
             throw new DataForSEOException(
                 'DataForSEO configuration is incomplete. Please check your environment variables.',
@@ -40,7 +39,7 @@ class DataForSEOService
             ->acceptJson()
             ->baseUrl($this->baseUrl)
             ->timeout(config('services.dataforseo.timeout', 30))
-            ->retry(3, 100); // Retry 3 times with 100ms delay
+            ->retry(3, 100);
     }
 
     /**
@@ -58,7 +57,6 @@ class DataForSEOService
         string $languageCode = 'en',
         int $locationCode = 2840
     ): array {
-        // Validate input
         if (empty($keywords)) {
             throw new InvalidArgumentException('Keywords array cannot be empty');
         }
@@ -67,7 +65,6 @@ class DataForSEOService
             throw new InvalidArgumentException('Maximum 100 keywords allowed per request');
         }
 
-        // Validate keywords
         foreach ($keywords as $keyword) {
             if (!is_string($keyword) || empty(trim($keyword))) {
                 throw new InvalidArgumentException('Invalid keyword: ' . $keyword);
@@ -77,14 +74,12 @@ class DataForSEOService
             }
         }
 
-        // Generate cache key
         $cacheKey = $this->getCacheKey('search_volume', [
             'keywords' => $keywords,
             'language_code' => $languageCode,
             'location_code' => $locationCode,
         ]);
 
-        // Check cache first
         if (Cache::has($cacheKey)) {
             Log::info('Cache hit for search volume', [
                 'keywords_count' => count($keywords),
@@ -115,7 +110,6 @@ class DataForSEOService
                 ->throw()
                 ->json();
 
-            // Validate response structure
             if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
                 Log::error('Invalid API response structure: missing tasks', ['response' => $response]);
                 throw new DataForSEOException(
@@ -127,7 +121,6 @@ class DataForSEOService
 
             $task = $response['tasks'][0];
 
-            // Check for API errors
             if (isset($task['status_code']) && $task['status_code'] !== 20000) {
                 $errorMessage = $task['status_message'] ?? 'Unknown error';
                 Log::error('DataForSEO API error', [
@@ -141,7 +134,6 @@ class DataForSEOService
                 );
             }
 
-            // Validate result structure
             if (!isset($task['result']) || !is_array($task['result']) || empty($task['result'])) {
                 Log::warning('No results found in API response', ['task' => $task]);
                 return [];
@@ -154,12 +146,10 @@ class DataForSEOService
 
             $items = $task['result'][0]['items'];
 
-            // Transform to DTOs
             $results = array_map(function ($item) {
                 return SearchVolumeDTO::fromArray($item);
             }, $items);
 
-            // Cache results
             Cache::put($cacheKey, $results, now()->addSeconds($this->cacheTTL));
 
             Log::info('Successfully fetched search volume', [
@@ -198,9 +188,6 @@ class DataForSEOService
         }
     }
 
-    /**
-     * Generate cache key for given parameters
-     */
     protected function getCacheKey(string $type, array $params): string
     {
         $key = sprintf(

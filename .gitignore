@@ -31,3 +31,13 @@ auth.json
 /pbn-detector/.venv/*
 **/__pycache__/
 *.pyc
+*.pyo
+*.rdb
+dump.rdb
+
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
