@@ -1,0 +1,171 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: luminiaeo_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-luminiaeo}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_USER: ${DB_USERNAME:-luminiaeo}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - luminiaeo-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: luminiaeo_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - luminiaeo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Laravel Application (PHP-FPM)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: luminiaeo_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+      - ./storage:/var/www/html/storage
+    networks:
+      - luminiaeo-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override with Docker service names for internal communication
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Override service URLs to use Docker service names
+      - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
+      - PBN_DETECTOR_URL=http://pbn-detector:8000
+
+  # Nginx Web Server
+  nginx:
+    image: nginx:alpine
+    container_name: luminiaeo_nginx
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:80"
+    volumes:
+      - ./:/var/www/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - luminiaeo-network
+    depends_on:
+      - app
+
+  # Laravel Queue Worker
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: luminiaeo_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+      - ./storage:/var/www/html/storage
+    networks:
+      - luminiaeo-network
+    depends_on:
+      - mysql
+      - redis
+      - app
+    command: php artisan queue:work --tries=3 --timeout=600
+    env_file:
+      - .env
+    environment:
+      # Override with Docker service names for internal communication
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Override service URLs to use Docker service names
+      - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
+      - PBN_DETECTOR_URL=http://pbn-detector:8000
+
+  # Keyword Clustering Service (Python)
+  clustering:
+    build:
+      context: ./keyword-clustering-service
+      dockerfile: Dockerfile
+    container_name: luminiaeo_clustering
+    restart: unless-stopped
+    ports:
+      - "${CLUSTERING_PORT:-8001}:8001"
+    networks:
+      - luminiaeo-network
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PBN Detector Service (Python)
+  pbn-detector:
+    build:
+      context: ./pbn-detector
+      dockerfile: Dockerfile
+    container_name: luminiaeo_pbn_detector
+    restart: unless-stopped
+    ports:
+      - "${PBN_DETECTOR_PORT:-8002}:8000"
+    networks:
+      - luminiaeo-network
+    env_file:
+      - .env
+    environment:
+      # Override with Docker service names for internal communication
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  luminiaeo-network:
+    driver: bridge
+

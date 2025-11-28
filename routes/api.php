@@ -1,9 +1,9 @@
 <?php
 
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CitationController;
 use App\Http\Controllers\Api\DataForSEO\BacklinksController;
 use App\Http\Controllers\Api\DataForSEO\DataForSEOController;
-use App\Http\Controllers\Api\KeywordController;
 use App\Http\Controllers\Api\KeywordPlannerController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -23,15 +23,22 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
-    // Keywords routes
-    Route::prefix('keywords')->group(function () {
-        Route::get('/', [KeywordController::class, 'index'])->name('keywords.index');
-        Route::post('/', [KeywordController::class, 'store'])->name('keywords.store');
-        Route::put('/{id}', [KeywordController::class, 'update'])->name('keywords.update');
-        Route::delete('/{id}', [KeywordController::class, 'destroy'])->name('keywords.destroy');
+    Route::prefix('citations')->middleware('throttle:20,1')->group(function () {
+        Route::post('/analyze', [CitationController::class, 'analyze'])->name('citations.analyze');
+        Route::get('/status/{taskId}', [CitationController::class, 'status'])->name('citations.status');
+        Route::get('/results/{taskId}', [CitationController::class, 'results'])->name('citations.results');
+        Route::post('/retry/{taskId}', [CitationController::class, 'retry'])->name('citations.retry');
     });
 
-    // Keyword planner routes
+    // Keyword research routes
+    Route::prefix('keyword-research')->group(function () {
+        Route::post('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'create'])->name('keyword-research.create');
+        Route::get('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'index'])->name('keyword-research.index');
+        Route::get('/{id}/status', [\App\Http\Controllers\Api\KeywordResearchController::class, 'status'])->name('keyword-research.status');
+        Route::get('/{id}/results', [\App\Http\Controllers\Api\KeywordResearchController::class, 'results'])->name('keyword-research.results');
+    });
+
+    // Keyword planner routes (legacy)
     Route::get('/keyword-ideas', [KeywordPlannerController::class, 'getKeywordIdeas']);
 
     // DataForSEO routes with rate limiting

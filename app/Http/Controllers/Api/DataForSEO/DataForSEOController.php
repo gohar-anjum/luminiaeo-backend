@@ -22,25 +22,17 @@ class DataForSEOController extends Controller
         $this->responseModifier = $responseModifier;
     }
 
-    /**
-     * Get search volume for keywords
-     *
-     * @param SearchVolumeRequest $request
-     * @return JsonResponse
-     */
     public function searchVolume(SearchVolumeRequest $request): JsonResponse
     {
         try {
             $validated = $request->validated();
 
-            // Get search volume data
             $results = $this->service->getSearchVolume(
                 $validated['keywords'],
                 $validated['language_code'],
                 $validated['location_code']
             );
 
-            // Convert DTOs to arrays for response
             $data = array_map(function ($dto) {
                 return $dto->toArray();
             }, $results);
