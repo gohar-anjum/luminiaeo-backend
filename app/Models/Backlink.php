@@ -43,49 +43,31 @@ class Backlink extends Model
         'safe_browsing_checked_at' => 'datetime',
     ];
 
-    /**
-     * Get the SEO task that owns this backlink
-     */
     public function seoTask(): BelongsTo
     {
         return $this->belongsTo(SeoTask::class, 'task_id', 'task_id');
     }
 
-    /**
-     * Get the project that this backlink belongs to (via domain)
-     */
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class, 'domain', 'domain');
     }
 
-    /**
-     * Scope a query to filter by domain
-     */
     public function scopeForDomain($query, string $domain)
     {
         return $query->where('domain', $domain);
     }
 
-    /**
-     * Scope a query to filter by task ID
-     */
     public function scopeForTask($query, string $taskId)
     {
         return $query->where('task_id', $taskId);
     }
 
-    /**
-     * Scope a query to filter by link type
-     */
     public function scopeOfType($query, string $type)
     {
         return $query->where('link_type', $type);
     }
 
-    /**
-     * Scope a query to filter by minimum domain rank
-     */
     public function scopeMinDomainRank($query, float $minRank)
     {
         return $query->where('domain_rank', '>=', $minRank);

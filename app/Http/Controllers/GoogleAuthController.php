@@ -18,7 +18,7 @@ class GoogleAuthController extends Controller
             'prompt' => 'consent',
         ]);
 
-        return redirect("https://accounts.google.com/o/oauth2/v2/auth?$query");
+        return redirect("https://accounts.google.com/o/oauth2/v2/auth?" . $query);
     }
 
     public function handleGoogleCallback(Request $request)

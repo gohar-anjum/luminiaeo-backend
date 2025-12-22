@@ -31,4 +31,3 @@ class BacklinksResultsRequest extends FormRequest
         ];
     }
 }
-

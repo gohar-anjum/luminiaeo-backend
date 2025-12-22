@@ -16,21 +16,11 @@ class AnswerThePublicService
         $this->apiKey = config('services.answerthepublic.api_key');
     }
 
-    /**
-     * Check if ATP service is available
-     */
     public function isAvailable(): bool
     {
         return !empty($this->apiKey);
     }
 
-    /**
-     * Fetch keyword data from AnswerThePublic
-     *
-     * @param string $seedKeyword
-     * @param string $languageCode
-     * @return array<KeywordDataDTO>
-     */
     public function getKeywordData(string $seedKeyword, string $languageCode = 'en'): array
     {
         if (!$this->isAvailable()) {
@@ -53,13 +43,10 @@ class AnswerThePublicService
         }
     }
 
-    /**
-     * Fetch from official API
-     */
     protected function fetchFromApi(string $seedKeyword, string $languageCode): array
     {
         $url = "{$this->baseUrl}/api/v1/search";
-        
+
         $response = Http::withHeaders([
             'Authorization' => "Bearer {$this->apiKey}",
         ])
@@ -81,13 +68,10 @@ class AnswerThePublicService
         return $this->parseApiResponse($data, $seedKeyword);
     }
 
-    /**
-     * Scrape data from ATP website
-     */
     protected function scrapeData(string $seedKeyword, string $languageCode): array
     {
-        $url = "https://answerthepublic.com/reports/{$seedKeyword}";
-        
+        $url = "https://api.answerthepublic.com/v0/questions";
+
         try {
             $response = Http::withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -110,14 +94,10 @@ class AnswerThePublicService
         }
     }
 
-    /**
-     * Parse API response
-     */
     protected function parseApiResponse(array $data, string $seedKeyword): array
     {
         $keywords = [];
 
-        // Questions
         if (isset($data['questions']) && is_array($data['questions'])) {
             foreach ($data['questions'] as $question) {
                 if (is_string($question)) {
@@ -130,7 +110,6 @@ class AnswerThePublicService
             }
         }
 
-        // Prepositions
         if (isset($data['prepositions']) && is_array($data['prepositions'])) {
             foreach ($data['prepositions'] as $preposition) {
                 if (is_string($preposition)) {
@@ -142,7 +121,6 @@ class AnswerThePublicService
             }
         }
 
-        // Comparisons
         if (isset($data['comparisons']) && is_array($data['comparisons'])) {
             foreach ($data['comparisons'] as $comparison) {
                 if (is_string($comparison)) {
@@ -154,7 +132,6 @@ class AnswerThePublicService
             }
         }
 
-        // Related
         if (isset($data['related']) && is_array($data['related'])) {
             foreach ($data['related'] as $related) {
                 if (is_string($related)) {
@@ -169,21 +146,17 @@ class AnswerThePublicService
         return $keywords;
     }
 
-    /**
-     * Parse HTML response (simplified)
-     */
     protected function parseHtmlResponse(string $html, string $seedKeyword): array
     {
         $keywords = [];
-        
-        // Extract questions (simplified regex)
+
         preg_match_all('/<div[^>]*class="[^"]*question[^"]*"[^>]*>(.*?)<\/div>/is', $html, $questionMatches);
         if (!empty($questionMatches[1])) {
             foreach ($questionMatches[1] as $question) {
                 $question = strip_tags($question);
                 $question = html_entity_decode($question, ENT_QUOTES | ENT_HTML5, 'UTF-8');
                 $question = trim($question);
-                
+
                 if (!empty($question)) {
                     $keywords[] = new KeywordDataDTO(
                         keyword: $question,
@@ -197,12 +170,8 @@ class AnswerThePublicService
         return $keywords;
     }
 
-    /**
-     * Check if API access is available
-     */
     protected function hasApiAccess(): bool
     {
         return !empty($this->apiKey) && strlen($this->apiKey) > 20;
     }
 }
-

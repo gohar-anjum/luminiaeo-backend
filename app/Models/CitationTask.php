@@ -40,4 +40,3 @@ class CitationTask extends Model
         return $this;
     }
 }
-

@@ -28,4 +28,3 @@ class ClusterDataDTO
         ], fn($value) => $value !== null);
     }
 }
-

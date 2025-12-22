@@ -21,15 +21,13 @@ class CitationChunkJob implements ShouldQueue
     public $tries = 3;
     public $timeout = 300;
 
-    /**
-     * @param array<int,string> $chunk
-     */
     public function __construct(
         public int $taskId,
         public array $chunk,
         public int $offset,
         public int $totalQueries
     ) {
+        $this->onQueue('citations');
     }
 
     public function handle(
@@ -50,105 +48,21 @@ class CitationChunkJob implements ShouldQueue
         }
 
         $results = [];
+        $gptBatch = $llmClient->batchValidateCitations($this->chunk, $task->url, 'openai');
+        $geminiBatch = $llmClient->batchValidateCitations($this->chunk, $task->url, 'gemini');
+
         foreach ($this->chunk as $index => $query) {
-            // Perform deep research - ensure no steps are skipped
-            // Both GPT and Gemini must perform comprehensive analysis
-            Log::info('Starting deep research for citation query', [
-                'task_id' => $task->id,
-                'query_index' => $index,
-                'query' => $query,
-                'url' => $task->url,
-            ]);
+            $gpt = $gptBatch[$index] ?? $this->defaultResult('gpt', $query);
+            $gemini = $geminiBatch[$index] ?? $this->defaultResult('gemini', $query);
 
-            // Deep research with GPT - always perform all steps
-            $gpt = null;
-            try {
-                $gpt = $llmClient->checkCitationOpenAi($query, $task->url);
-                Log::info('GPT deep research completed', [
-                    'task_id' => $task->id,
-                    'query_index' => $index,
-                    'citation_found' => $gpt['citation_found'] ?? false,
-                    'confidence' => $gpt['confidence'] ?? 0,
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('GPT deep research failed - creating error result', [
-                    'task_id' => $task->id,
-                    'query_index' => $index,
-                    'error' => $e->getMessage(),
-                ]);
-                // Still create result - no skipping
-                $gpt = [
-                    'citation_found' => false,
-                    'confidence' => 0,
-                    'citation_references' => [],
-                    'explanation' => 'GPT deep research encountered an error: ' . $e->getMessage() . '. All research steps were attempted.',
-                    'raw_response' => null,
-                    'provider' => 'gpt',
-                ];
-            }
+            $topCompetitors = $this->mergeCompetitors(
+                $task->url,
+                $gpt['competitors'] ?? [],
+                $gemini['competitors'] ?? []
+            );
 
-            // Deep research with Gemini - always perform all steps
-            $gemini = null;
-            try {
-                $gemini = $llmClient->checkCitationGemini($query, $task->url);
-                Log::info('Gemini deep research completed', [
-                    'task_id' => $task->id,
-                    'query_index' => $index,
-                    'citation_found' => $gemini['citation_found'] ?? false,
-                    'confidence' => $gemini['confidence'] ?? 0,
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('Gemini deep research failed - creating error result', [
-                    'task_id' => $task->id,
-                    'query_index' => $index,
-                    'error' => $e->getMessage(),
-                ]);
-                // Still create result - no skipping
-                $gemini = [
-                    'citation_found' => false,
-                    'confidence' => 0,
-                    'citation_references' => [],
-                    'explanation' => 'Gemini deep research encountered an error: ' . $e->getMessage() . '. All research steps were attempted.',
-                    'raw_response' => null,
-                    'provider' => 'gemini',
-                ];
-            }
-
-            // Ensure both results exist - no query should be skipped
-            if ($gpt === null) {
-                $gpt = [
-                    'citation_found' => false,
-                    'confidence' => 0,
-                    'citation_references' => [],
-                    'explanation' => 'GPT research returned null - all research steps were attempted but no result obtained.',
-                    'raw_response' => null,
-                    'provider' => 'gpt',
-                ];
-            }
-
-            if ($gemini === null) {
-                $gemini = [
-                    'citation_found' => false,
-                    'confidence' => 0,
-                    'citation_references' => [],
-                    'explanation' => 'Gemini research returned null - all research steps were attempted but no result obtained.',
-                    'raw_response' => null,
-                    'provider' => 'gemini',
-                ];
-            }
-
-            // Create result - this query has been fully processed with deep research
-            $dto = new CitationQueryResultDTO((int) $index, $query, $gpt, $gemini);
+            $dto = new CitationQueryResultDTO((int) $index, $query, $gpt, $gemini, $topCompetitors);
             $results[(string) $index] = $dto->toArray();
-
-            Log::info('Deep research completed for citation query', [
-                'task_id' => $task->id,
-                'query_index' => $index,
-                'gpt_citation_found' => $gpt['citation_found'] ?? false,
-                'gemini_citation_found' => $gemini['citation_found'] ?? false,
-                'gpt_confidence' => $gpt['confidence'] ?? 0,
-                'gemini_confidence' => $gemini['confidence'] ?? 0,
-            ]);
         }
 
         $meta = [
@@ -176,5 +90,100 @@ class CitationChunkJob implements ShouldQueue
             'message' => $exception->getMessage(),
         ]);
     }
-}
 
+    protected function mergeCompetitors(string $targetUrl, array ...$lists): array
+    {
+        $targetDomain = $this->normalizeDomain($targetUrl);
+        $tallies = [];
+
+        foreach ($lists as $list) {
+            foreach ($list as $entry) {
+                $domain = $this->normalizeDomain($entry['domain'] ?? ($entry['url'] ?? null));
+                if (!$domain || $this->isTargetDomain($domain, $targetDomain)) {
+                    continue;
+                }
+
+                $key = $this->rootDomain($domain);
+
+                if (!isset($tallies[$key])) {
+                    $tallies[$key] = [
+                        'domain' => $key,
+                        'urls' => [],
+                        'mentions' => 0,
+                    ];
+                }
+
+                $tallies[$key]['mentions']++;
+
+                if (!empty($entry['url'])) {
+                    $tallies[$key]['urls'][] = $entry['url'];
+                }
+            }
+        }
+
+        foreach ($tallies as &$data) {
+            $data['urls'] = array_values(array_unique($data['urls']));
+        }
+        unset($data);
+
+        usort($tallies, fn ($a, $b) => $b['mentions'] <=> $a['mentions']);
+
+        return array_slice(array_map(function ($item) {
+            return [
+                'domain' => $item['domain'],
+                'urls' => array_slice($item['urls'], 0, 3),
+                'mentions' => $item['mentions'],
+            ];
+        }, $tallies), 0, 2);
+    }
+
+    protected function defaultResult(string $provider, string $query): array
+    {
+        return [
+            'provider' => $provider,
+            'citation_found' => false,
+            'confidence' => 0.0,
+            'citation_references' => [],
+            'competitors' => [],
+            'explanation' => 'Provider result missing',
+            'raw_response' => null,
+            'query' => $query,
+        ];
+    }
+
+    protected function normalizeDomain(?string $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        $host = parse_url($value, PHP_URL_HOST) ?: $value;
+        $host = strtolower(trim($host));
+        $host = preg_replace('/^www\./', '', $host);
+
+        return $host ?: null;
+    }
+
+    protected function rootDomain(?string $domain): ?string
+    {
+        if (!$domain) {
+            return null;
+        }
+
+        $parts = explode('.', $domain);
+        if (count($parts) <= 2) {
+            return $domain;
+        }
+
+        return implode('.', array_slice($parts, -2));
+    }
+
+    protected function isTargetDomain(?string $domain, ?string $target): bool
+    {
+        if (!$domain || !$target) {
+            return false;
+        }
+
+        return $this->rootDomain($domain) === $this->rootDomain($target);
+    }
+}

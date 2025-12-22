@@ -56,8 +56,8 @@ class BacklinkDTO
             ?? null;
 
         $raw = $data;
-        $spamScore = isset($data['backlink_spam_score']) && is_numeric($data['backlink_spam_score']) 
-            ? (int)$data['backlink_spam_score'] 
+        $spamScore = isset($data['backlink_spam_score']) && is_numeric($data['backlink_spam_score'])
+            ? (int)$data['backlink_spam_score']
             : (isset($data['url_to_spam_score']) && is_numeric($data['url_to_spam_score'])
                 ? (int)$data['url_to_spam_score']
                 : null);
@@ -94,31 +94,31 @@ class BacklinkDTO
             }
             $this->whoisRegistrar = $registrar;
         }
-        
+
         $domainAge = $signals['domain_age_days'] ?? null;
         $this->domainAgeDays = is_array($domainAge) ? null : ($domainAge ? (int)$domainAge : $this->domainAgeDays);
     }
 
     public function applyDetection(array $result): void
     {
-        $this->pbnProbability = isset($result['pbn_probability']) && is_numeric($result['pbn_probability']) 
-            ? (float)$result['pbn_probability'] 
+        $this->pbnProbability = isset($result['pbn_probability']) && is_numeric($result['pbn_probability'])
+            ? (float)$result['pbn_probability']
             : $this->pbnProbability;
-            
-        $this->riskLevel = isset($result['risk_level']) && is_string($result['risk_level']) 
-            ? $result['risk_level'] 
+
+        $this->riskLevel = isset($result['risk_level']) && is_string($result['risk_level'])
+            ? $result['risk_level']
             : $this->riskLevel;
-            
-        $this->pbnReasons = isset($result['reasons']) && is_array($result['reasons']) 
-            ? $result['reasons'] 
+
+        $this->pbnReasons = isset($result['reasons']) && is_array($result['reasons'])
+            ? $result['reasons']
             : $this->pbnReasons;
-            
-        $this->pbnSignals = isset($result['signals']) && is_array($result['signals']) 
-            ? $result['signals'] 
+
+        $this->pbnSignals = isset($result['signals']) && is_array($result['signals'])
+            ? $result['signals']
             : $this->pbnSignals;
-        
+
         $signals = $result['signals'] ?? [];
-        
+
         if (isset($signals['asn']) && !is_array($signals['asn'])) {
             $this->asn = is_string($signals['asn']) || is_numeric($signals['asn']) ? (string)$signals['asn'] : $this->asn;
         }
@@ -134,10 +134,10 @@ class BacklinkDTO
     {
         $status = $data['status'] ?? null;
         $this->safeBrowsingStatus = is_array($status) ? 'unknown' : ($status ? (string)$status : ($this->safeBrowsingStatus ?? 'unknown'));
-        
+
         $threats = $data['threats'] ?? null;
         $this->safeBrowsingThreats = is_array($threats) ? $threats : null;
-        
+
         $checkedAt = $data['checked_at'] ?? null;
         $this->safeBrowsingCheckedAt = is_array($checkedAt) ? null : ($checkedAt ? (string)$checkedAt : $this->safeBrowsingCheckedAt);
     }
@@ -171,10 +171,10 @@ class BacklinkDTO
 
     public function toDatabaseArray(): array
     {
-        $parseDate = fn($date) => is_string($date) && !empty($date) 
+        $parseDate = fn($date) => is_string($date) && !empty($date)
             ? (function() use ($date) { try { return \Carbon\Carbon::parse($date); } catch (\Exception $e) { return null; } })()
             : ($date instanceof \DateTimeInterface ? $date : null);
-        
+
         $safeString = fn($val, $maxLength = null) => is_array($val) ? null : ($val !== null ? ($maxLength ? mb_substr((string)$val, 0, $maxLength) : (string)$val) : null);
 
         $safeBrowsingCheckedAt = $parseDate($this->safeBrowsingCheckedAt);
@@ -205,4 +205,3 @@ class BacklinkDTO
         ];
     }
 }
-

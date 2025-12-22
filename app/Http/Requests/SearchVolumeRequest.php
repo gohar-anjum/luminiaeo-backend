@@ -57,12 +57,10 @@ class SearchVolumeRequest extends FormRequest
     public function validated($key = null, $default = null)
     {
         $validated = parent::validated($key, $default);
-        
-        // Set defaults
+
         $validated['language_code'] = $validated['language_code'] ?? 'en';
-        $validated['location_code'] = $validated['location_code'] ?? 2840; // United States
-        
+        $validated['location_code'] = $validated['location_code'] ?? 2840;
+
         return $validated;
     }
 }
-

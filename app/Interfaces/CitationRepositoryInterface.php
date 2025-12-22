@@ -18,4 +18,3 @@ interface CitationRepositoryInterface
 
     public function findCompletedByUrl(string $url, ?int $cacheDays = null): ?CitationTask;
 }
-

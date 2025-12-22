@@ -11,13 +11,6 @@ class KeywordScraperService
     protected const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
     protected const TIMEOUT = 30;
 
-    /**
-     * Scrape Google Autocomplete suggestions
-     *
-     * @param string $seedKeyword
-     * @param string $languageCode
-     * @return array<KeywordDataDTO>
-     */
     public function scrapeAutocomplete(string $seedKeyword, string $languageCode = 'en'): array
     {
         try {
@@ -72,16 +65,10 @@ class KeywordScraperService
         }
     }
 
-    /**
-     * Scrape People Also Ask (PAA) questions
-     *
-     * @param string $seedKeyword
-     * @return array<KeywordDataDTO>
-     */
     public function scrapePeopleAlsoAsk(string $seedKeyword): array
     {
         try {
-            $url = 'https://www.google.com/search';
+            $url = 'https://www.google.com/complete/search';
             $params = [
                 'q' => $seedKeyword,
                 'hl' => 'en',
@@ -98,16 +85,16 @@ class KeywordScraperService
             }
 
             $html = $response->body();
-            
+
             preg_match_all('/<div[^>]*class="[^"]*related-question[^"]*"[^>]*>.*?<span[^>]*>(.*?)<\/span>/is', $html, $matches);
-            
+
             $questions = [];
             if (!empty($matches[1])) {
                 foreach ($matches[1] as $question) {
                     $question = strip_tags($question);
                     $question = html_entity_decode($question, ENT_QUOTES | ENT_HTML5, 'UTF-8');
                     $question = trim($question);
-                    
+
                     if (!empty($question) && strlen($question) > 10) {
                         $questions[] = new KeywordDataDTO(
                             keyword: $question,
@@ -133,21 +120,15 @@ class KeywordScraperService
                 'keyword' => $seedKeyword,
                 'error' => $e->getMessage(),
             ]);
-            
+
             return $this->generateQuestionVariations($seedKeyword);
         }
     }
 
-    /**
-     * Scrape Related Searches
-     *
-     * @param string $seedKeyword
-     * @return array<KeywordDataDTO>
-     */
     public function scrapeRelatedSearches(string $seedKeyword): array
     {
         try {
-            $url = 'https://www.google.com/search';
+            $url = 'https://www.google.com/complete/search';
             $params = [
                 'q' => $seedKeyword,
                 'hl' => 'en',
@@ -164,17 +145,16 @@ class KeywordScraperService
             }
 
             $html = $response->body();
-            
-            // Extract related searches
+
             preg_match_all('/<a[^>]*class="[^"]*related-question[^"]*"[^>]*>.*?<span[^>]*>(.*?)<\/span>/is', $html, $matches);
-            
+
             $keywords = [];
             if (!empty($matches[1])) {
                 foreach ($matches[1] as $related) {
                     $related = strip_tags($related);
                     $related = html_entity_decode($related, ENT_QUOTES | ENT_HTML5, 'UTF-8');
                     $related = trim($related);
-                    
+
                     if (!empty($related)) {
                         $keywords[] = new KeywordDataDTO(
                             keyword: $related,
@@ -199,12 +179,6 @@ class KeywordScraperService
         }
     }
 
-    /**
-     * Generate question variations as fallback
-     *
-     * @param string $keyword
-     * @return array<KeywordDataDTO>
-     */
     protected function generateQuestionVariations(string $keyword): array
     {
         $questionStarters = [
@@ -232,13 +206,6 @@ class KeywordScraperService
         return $questions;
     }
 
-    /**
-     * Scrape all sources and combine results
-     *
-     * @param string $seedKeyword
-     * @param string $languageCode
-     * @return array<KeywordDataDTO>
-     */
     public function scrapeAll(string $seedKeyword, string $languageCode = 'en'): array
     {
         $allKeywords = [];
@@ -265,4 +232,3 @@ class KeywordScraperService
         return $unique;
     }
 }
-

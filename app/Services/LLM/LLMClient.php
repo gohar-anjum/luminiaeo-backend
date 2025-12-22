@@ -2,677 +2,534 @@
 
 namespace App\Services\LLM;
 
-use Illuminate\Http\Client\PendingRequest;
-use Illuminate\Support\Facades\Cache;
+use App\Services\LLM\Prompt\PlaceholderReplacer;
+use App\Services\LLM\Prompt\PromptLoader;
+use App\Services\LLM\Support\JsonExtractor;
+use App\Services\LLM\Transformers\KeywordIntentParser;
+use App\Services\LLM\Failures\ProviderCircuitBreaker;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class LLMClient
 {
-    protected const RAW_RESPONSE_LIMIT = 10000;
-
-    protected ?string $openAiKey;
-    protected string $openAiBase;
-    protected ?string $googleApiKey;
-
-    public function __construct()
-    {
-        $this->openAiKey = config('citations.openai.api_key', '');
-        $this->openAiBase = config('citations.openai.base_url', 'https://api.openai.com/v1');
-        $this->googleApiKey = config('citations.gemini.api') ??'';
+    public function __construct(
+        protected PromptLoader $prompts,
+        protected PlaceholderReplacer $replacer,
+        protected ProviderCircuitBreaker $breaker,
+        protected KeywordIntentParser $keywordParser,
+    ) {
     }
 
-    public function canUseOpenAi(): bool
+    public function analyzeKeywordIntent(string $keyword): array
     {
-        return !empty($this->openAiKey) && $this->providerAvailable('openai');
-    }
+        $template = $this->prompts->load('keyword/intent_analysis');
+        $messages = [
+            ['role' => 'system', 'content' => $template['system'] ?? 'You analyze keyword intent.'],
+            [
+                'role' => 'user',
+                'content' => $this->replacer->replace($template['user'] ?? 'Analyze the following search query: {{ keyword }}', [
+                    'keyword' => $keyword,
+                ]),
+            ],
+        ];
 
-    public function canUseGemini(): bool
-    {
-        return !empty($this->googleApiKey) && $this->providerAvailable('gemini');
+        foreach ($this->preferredProviders() as $provider) {
+            if (!$this->canUseProvider($provider)) {
+                continue;
+            }
+
+            try {
+                $raw = $this->sendWithProvider($provider, $messages, ['temperature' => 0.1]);
+                $text = $this->extractTextFromRaw($raw, $provider);
+                $parsed = $this->keywordParser->parse($text);
+                $this->breaker->clearFailures($provider);
+
+                return $this->normalizeIntentResponse($parsed);
+            } catch (\Throwable $e) {
+                $this->breaker->recordFailure($provider);
+                Log::error('Keyword intent analysis failed', [
+                    'provider' => $provider,
+                    'keyword' => $keyword,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $this->defaultIntentFallback('No provider available');
     }
 
     public function generateQueries(string $url, int $count): array
     {
-        if (!$this->canUseOpenAi()) {
-            Log::info('OpenAI query generation skipped - provider unavailable', [
-                'url' => $url,
-                'count' => $count,
-            ]);
-            return [];
-        }
+        $count = min(max($count, 1), config('citations.max_queries', 5000));
+        $batchSize = max(50, config('citations.query_generation.max_per_call', 250));
 
-        $template = $this->promptSections('query_generation');
-        $messages = [
-            [
-                'role' => 'system',
-                'content' => $this->replacePlaceholders($template['system'] ?? '', [
-                    '{url}' => $url,
-                    '{N}' => (string) $count,
-                ]),
-            ],
-            [
-                'role' => 'user',
-                'content' => $this->replacePlaceholders($template['user'] ?? '', [
-                    '{url}' => $url,
-                    '{N}' => (string) $count,
-                ]),
-            ],
-        ];
+        $template = $this->prompts->load('citation/query_generation');
+        $system = $template['system'] ?? '';
+        $userTemplate = $template['user'] ?: "Target URL: {{ url }}\nRequested Queries: {{ N }}\nReturn a JSON array of unique search queries.";
 
-        Log::info('Calling OpenAI for query generation', [
-            'provider' => 'openai',
-            'url' => $url,
-            'requested_count' => $count,
-            'model' => config('citations.openai.model'),
-            'messages_count' => count($messages),
-        ]);
+        $collected = [];
+        $attempts = 0;
+        $maxAttempts = max(ceil($count / $batchSize) * 2, 8);
 
-        try {
-            $startTime = microtime(true);
-            $response = $this->callOpenAi($messages);
-            $duration = round((microtime(true) - $startTime) * 1000, 2); // milliseconds
-            
-            Log::info('OpenAI query generation response received', [
-                'provider' => 'openai',
-                'url' => $url,
-                'duration_ms' => $duration,
-                'response_structure' => [
-                    'has_choices' => isset($response['choices']),
-                    'choices_count' => isset($response['choices']) ? count($response['choices']) : 0,
-                    'response_keys' => array_keys($response),
-                ],
-                'full_response' => $response,
-            ]);
-            
-            $content = $response['choices'][0]['message']['content'] ?? '[]';
-            
-            Log::info('OpenAI query generation raw content', [
-                'provider' => 'openai',
-                'url' => $url,
-                'raw_content' => $content,
-                'content_length' => strlen($content),
-            ]);
-            
-            $content = $this->extractJsonFromMarkdown($content);
-            
-            Log::info('OpenAI query generation extracted JSON', [
-                'provider' => 'openai',
-                'url' => $url,
-                'extracted_content' => $content,
-            ]);
-            
-            $decoded = json_decode($content, true);
+        while (count($collected) < $count && $attempts < $maxAttempts) {
+            $remaining = $count - count($collected);
+            $currentBatch = min($batchSize, $remaining);
 
-            if (!is_array($decoded)) {
-                Log::error('OpenAI query generation JSON decode failed', [
-                    'provider' => 'openai',
-                    'url' => $url,
-                    'content' => $content,
-                    'json_error' => json_last_error_msg(),
-                ]);
-                throw new \RuntimeException('OpenAI query generation did not return valid JSON: ' . json_last_error_msg());
+            $userPrompt = $this->replacer->replace($userTemplate, [
+                'url' => $url,
+                'N' => (string) $currentBatch,
+            ]);
+
+            $messages = [
+                ['role' => 'system', 'content' => $system],
+                ['role' => 'user', 'content' => $userPrompt],
+            ];
+
+            $response = $this->generateWithAnyProvider($messages);
+
+            if (!$response) {
+                break;
             }
 
-            $this->resetProviderFailures('openai');
+            $text = $this->extractTextFromRaw($response['raw'], $response['provider']);
+            $queries = $this->parseQueriesFromText($text);
+            $collected = array_values(array_unique(array_merge($collected, $queries)));
+            $attempts++;
 
-            $list = array_values(array_filter(array_map('trim', $decoded), fn ($q) => is_string($q) && $q !== ''));
+            if (empty($queries)) {
+                Log::warning('Query generation returned empty batch', [
+                    'provider' => $response['provider'],
+                    'attempt' => $attempts,
+                ]);
+            }
+        }
 
-            $result = array_slice($list, 0, $count);
+        return array_slice($collected, 0, $count);
+    }
 
-            Log::info('OpenAI query generation successful', [
-                'provider' => 'openai',
-                'url' => $url,
-                'requested_count' => $count,
-                'generated_count' => count($result),
-                'duration_ms' => $duration,
-                'queries' => $result,
-            ]);
-
-            return $result;
-        } catch (\Throwable $e) {
-            $this->recordProviderFailure('openai');
-            Log::error('OpenAI query generation failed', [
-                'provider' => 'openai',
-                'url' => $url,
-                'count' => $count,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+    public function batchValidateCitations(array $queries, string $targetUrl, string $provider): array
+    {
+        if (empty($queries)) {
             return [];
         }
+
+        if (!$this->canUseProvider($provider)) {
+            Log::warning('Provider unavailable for batch validation', ['provider' => $provider]);
+            return [];
+        }
+
+        $template = $this->prompts->load('citation/batch_validation');
+        $system = $template['system'] ?? '';
+        $userTemplate = $template['user'] ?? '';
+
+        $targetDomain = $this->normalizeDomain($targetUrl);
+        $batchSize = max(1, config('citations.validation.batch_size', 25));
+        $alias = $this->providerAlias($provider);
+
+        $results = [];
+
+        foreach (array_chunk($queries, $batchSize, true) as $chunk) {
+            $payload = [
+                'target_url' => $targetUrl,
+                'target_domain' => $targetDomain,
+                'queries' => collect($chunk)
+                    ->map(fn ($query, $index) => ['index' => $index, 'query' => $query])
+                    ->values()
+                    ->all(),
+            ];
+
+            $userPrompt = $this->replacer->replace($userTemplate, [
+                'url' => $targetUrl,
+                'domain' => (string) $targetDomain,
+            ]);
+
+            $messages = [
+                ['role' => 'system', 'content' => $system],
+                ['role' => 'user', 'content' => trim($userPrompt . "\n\n" . json_encode($payload, JSON_PRETTY_PRINT))],
+            ];
+
+            try {
+                $raw = $this->sendWithProvider($provider, $messages, ['temperature' => 0.1]);
+                $text = $this->extractTextFromRaw($raw, $provider);
+                $parsed = $this->parseCitationBatchResponse($text, $chunk, $targetDomain, $alias);
+                $results = array_replace($results, $parsed);
+                $this->breaker->clearFailures($provider);
+            } catch (\Throwable $e) {
+                $this->breaker->recordFailure($provider);
+                Log::error('Citation batch validation failed', [
+                    'provider' => $provider,
+                    'error' => $e->getMessage(),
+                ]);
+
+                foreach ($chunk as $index => $query) {
+                    $results[$index] = $this->defaultCitationResult($alias, $query, $e->getMessage());
+                }
+            }
+        }
+
+        ksort($results);
+
+        return $results;
     }
 
     public function checkCitationOpenAi(string $query, string $targetUrl): array
     {
-        if (!$this->canUseOpenAi()) {
-            Log::info('OpenAI citation check skipped - provider unavailable', [
-                'provider' => 'openai',
-                'query' => $query,
-                'target_url' => $targetUrl,
-            ]);
-            return $this->providerUnavailablePayload('gpt', 'openai_unavailable');
-        }
-
-        $template = $this->promptSections('citation_openai');
-        $messages = [
-            ['role' => 'system', 'content' => $template['system'] ?? ''],
-            [
-                'role' => 'user',
-                'content' => $this->replacePlaceholders($template['user'] ?? '', [
-                    '{query}' => $query,
-                    '{url}' => $targetUrl,
-                ]),
-            ],
-        ];
-
-        Log::info('Calling OpenAI for citation check', [
-            'provider' => 'openai',
-            'query' => $query,
-            'target_url' => $targetUrl,
-            'model' => config('citations.openai.model'),
-        ]);
-
-        try {
-            $startTime = microtime(true);
-            $response = $this->callOpenAi($messages, 0.3);
-            $duration = round((microtime(true) - $startTime) * 1000, 2); // milliseconds
-            
-            Log::info('OpenAI citation check response received', [
-                'provider' => 'openai',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'duration_ms' => $duration,
-                'response_structure' => [
-                    'has_choices' => isset($response['choices']),
-                    'choices_count' => isset($response['choices']) ? count($response['choices']) : 0,
-                    'response_keys' => array_keys($response),
-                ],
-                'full_response' => $response,
-            ]);
-            
-            $content = $response['choices'][0]['message']['content'] ?? '{}';
-            
-            Log::info('OpenAI citation check raw content', [
-                'provider' => 'openai',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'raw_content' => $content,
-                'content_length' => strlen($content),
-            ]);
-            
-            $parsed = $this->parseCitationResponse($content);
-            $parsed['raw_response'] = $this->truncateRaw($response);
-            $this->resetProviderFailures('openai');
-
-            Log::info('OpenAI citation check successful', [
-                'provider' => 'openai',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'citation_found' => $parsed['citation_found'],
-                'confidence' => $parsed['confidence'],
-                'references_count' => count($parsed['citation_references']),
-                'duration_ms' => $duration,
-                'response' => [
-                    'citation_found' => $parsed['citation_found'],
-                    'confidence' => $parsed['confidence'],
-                    'citation_references' => $parsed['citation_references'],
-                    'explanation' => $parsed['explanation'],
-                ],
-            ]);
-
-            return $parsed;
-        } catch (\Throwable $e) {
-            $this->recordProviderFailure('openai');
-            Log::error('OpenAI citation check failed', [
-                'provider' => 'openai',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return $this->errorPayload('gpt', $e->getMessage());
-        }
+        $results = $this->batchValidateCitations([$query], $targetUrl, 'openai');
+        return $results[0] ?? $this->defaultCitationResult('gpt', $query, 'No response');
     }
 
     public function checkCitationGemini(string $query, string $targetUrl): array
     {
-        if (!$this->canUseGemini()) {
-            Log::info('Gemini citation check skipped - provider unavailable', [
-                'provider' => 'gemini',
-                'query' => $query,
-                'target_url' => $targetUrl,
-            ]);
-            return $this->providerUnavailablePayload('gemini', 'gemini_unavailable');
-        }
-
-        $template = $this->promptSections('citation_gemini');
-        $prompt = $this->replacePlaceholders($template['user'] ?? '', [
-            '{query}' => $query,
-            '{url}' => $targetUrl,
-        ]);
-
-        Log::info('Calling Gemini for citation check', [
-            'provider' => 'gemini',
-            'query' => $query,
-            'target_url' => $targetUrl,
-            'model' => config('citations.gemini.model'),
-        ]);
-
-        try {
-            $startTime = microtime(true);
-            $response = $this->callGemini(
-                $template['system'] ?? '',
-                $prompt
-            );
-            $duration = round((microtime(true) - $startTime) * 1000, 2); // milliseconds
-
-            Log::info('Gemini citation check response received', [
-                'provider' => 'gemini',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'duration_ms' => $duration,
-                'response_structure' => [
-                    'has_candidates' => isset($response['candidates']),
-                    'candidates_count' => isset($response['candidates']) ? count($response['candidates']) : 0,
-                    'response_keys' => array_keys($response),
-                ],
-                'full_response' => $response,
-            ]);
-
-            $text = $response['candidates'][0]['content']['parts'][0]['text'] ?? '{}';
-            
-            Log::info('Gemini citation check raw content', [
-                'provider' => 'gemini',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'raw_content' => $text,
-                'content_length' => strlen($text),
-            ]);
-            
-            $parsed = $this->parseCitationResponse($text);
-            $parsed['raw_response'] = $this->truncateRaw($response);
-            $this->resetProviderFailures('gemini');
-
-            Log::info('Gemini citation check successful', [
-                'provider' => 'gemini',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'citation_found' => $parsed['citation_found'],
-                'confidence' => $parsed['confidence'],
-                'references_count' => count($parsed['citation_references']),
-                'duration_ms' => $duration,
-                'response' => [
-                    'citation_found' => $parsed['citation_found'],
-                    'confidence' => $parsed['confidence'],
-                    'citation_references' => $parsed['citation_references'],
-                    'explanation' => $parsed['explanation'],
-                ],
-            ]);
-
-            return $parsed;
-        } catch (\Throwable $e) {
-            $this->recordProviderFailure('gemini');
-            Log::error('Gemini citation check failed', [
-                'provider' => 'gemini',
-                'query' => $query,
-                'target_url' => $targetUrl,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return $this->errorPayload('gemini', $e->getMessage());
-        }
+        $results = $this->batchValidateCitations([$query], $targetUrl, 'gemini');
+        return $results[0] ?? $this->defaultCitationResult('gemini', $query, 'No response');
     }
 
-    protected function callOpenAi(array $messages, float $temperature = 0.2): array
+    protected function preferredProviders(): array
+    {
+        return ['openai', 'gemini'];
+    }
+
+    protected function canUseProvider(string $provider): bool
+    {
+        if ($this->breaker->isBlocked($provider)) {
+            return false;
+        }
+
+        return match ($provider) {
+            'openai' => !empty(config('citations.openai.api_key')),
+            'gemini' => !empty(config('citations.gemini.api')),
+            default => false,
+        };
+    }
+
+    protected function sendWithProvider(string $provider, array $messages, array $options = []): array
+    {
+        return match ($provider) {
+            'openai' => $this->callOpenAi($messages, $options),
+            'gemini' => $this->callGemini($messages, $options),
+            default => throw new \InvalidArgumentException("Unknown provider {$provider}"),
+        };
+    }
+
+    protected function callOpenAi(array $messages, array $options = []): array
     {
         $config = config('citations.openai');
-        $client = $this->openAiClient();
 
-        $response = $client->post('/chat/completions', [
-            'model' => $config['model'],
+        $payload = array_filter([
+            'model' => $config['model'] ?? 'gpt-4o',
+            'temperature' => $options['temperature'] ?? 0.2,
+            'response_format' => $options['response_format'] ?? ['type' => 'json_object'],
             'messages' => $messages,
-            'temperature' => $temperature,
-        ])->throw()->json();
+        ]);
 
-        return $response;
+        $response = Http::withToken($config['api_key'] ?? '')
+            ->timeout($config['timeout'] ?? 60)
+            ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
+            ->post(rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions', $payload);
+
+        if ($response->failed()) {
+            throw new \RuntimeException('OpenAI API error: ' . $response->body());
+        }
+
+        return $response->json();
     }
 
-    protected function callGemini(string $systemPrompt, string $userPrompt): array
+    protected function callGemini(array $messages, array $options = []): array
     {
         $config = config('citations.gemini');
+        $prompt = $this->flattenMessagesForGemini($messages);
 
         $payload = [
             'contents' => [
                 [
-                    'role' => 'user',
                     'parts' => [
-                        ['text' => trim($systemPrompt . "\n\n" . $userPrompt)],
+                        ['text' => $prompt],
                     ],
                 ],
             ],
             'generationConfig' => [
-                'temperature' => 0.3,
+                'temperature' => $options['temperature'] ?? 0.2,
             ],
         ];
 
         $endpoint = sprintf(
             'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s',
-            $config['model'],
-            $this->googleApiKey
+            $config['model'] ?? 'gemini-1.5-pro',
+            $config['api']
         );
 
-        return Http::withHeaders([
-            'Content-Type' => 'application/json',
-        ])
-            ->timeout($config['timeout'])
-            ->retry($config['max_retries'], $config['backoff_seconds']) // correct: seconds, not ms
-            ->post($endpoint, $payload)
-            ->throw()
-            ->json();
-    }
+        $response = Http::timeout($config['timeout'] ?? 60)
+            ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
+            ->post($endpoint, $payload);
 
-    protected function openAiClient(): PendingRequest
-    {
-        $config = config('citations.openai');
-
-        return Http::withToken($this->openAiKey)
-            ->acceptJson()
-            ->baseUrl($this->openAiBase)
-            ->timeout($config['timeout'])
-            ->retry($config['max_retries'], $config['backoff_seconds'] * 1000);
-    }
-
-    protected function promptSections(string $name): array
-    {
-        if (str_starts_with($name, 'keyword/')) {
-            $path = resource_path("prompts/{$name}.md");
-        } else {
-            $path = resource_path("prompts/citation/{$name}.md");
-        }
-        
-        if (!file_exists($path)) {
-            return ['system' => '', 'user' => ''];
+        if ($response->failed()) {
+            throw new \RuntimeException('Gemini API error: ' . $response->body());
         }
 
-        $content = file_get_contents($path);
-        $parts = preg_split('/^User:/mi', $content, 2);
-        $system = '';
-        $user = '';
+        return $response->json();
+    }
 
-        if (count($parts) === 2) {
-            $system = trim(preg_replace('/^System:\s*/mi', '', $parts[0]));
-            $user = trim($parts[1]);
-        } else {
-            $user = trim($content);
+    protected function flattenMessagesForGemini(array $messages): string
+    {
+        return collect($messages)
+            ->map(fn ($message) => strtoupper($message['role']) . ': ' . trim($message['content']))
+            ->implode("\n\n");
+    }
+
+    protected function extractTextFromRaw(mixed $raw, string $providerName): string
+    {
+        if (is_array($raw)) {
+            if (isset($raw['choices'][0]['message']['content'])) {
+                return (string) $raw['choices'][0]['message']['content'];
+            }
+
+            if (isset($raw['candidates'][0]['content']['parts'][0]['text'])) {
+                return (string) $raw['candidates'][0]['content']['parts'][0]['text'];
+            }
+
+            if (isset($raw['content']) && is_string($raw['content'])) {
+                return $raw['content'];
+            }
+
+            return json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
         }
 
-        return ['system' => $system, 'user' => $user];
+        return (string) $raw;
     }
 
-    protected function replacePlaceholders(string $text, array $replacements): string
+    protected function parseCitationBatchResponse(string $text, array $chunk, ?string $targetDomain, string $providerAlias): array
     {
-        return str_replace(array_keys($replacements), array_values($replacements), $text);
-    }
+        $json = JsonExtractor::extract($text) ?? $text;
+        $decoded = json_decode($json, true);
 
-    protected function extractJsonFromMarkdown(string $content): string
-    {
-        $content = trim($content);
-        
-        if (preg_match('/```(?:json)?\s*(.*?)\s*```/s', $content, $matches)) {
-            return trim($matches[1]);
+        $entries = [];
+        if (is_array($decoded)) {
+            if (isset($decoded['results']) && is_array($decoded['results'])) {
+                $entries = $decoded['results'];
+            } elseif (Arr::isList($decoded)) {
+                $entries = $decoded;
+            }
         }
-        
-        return $content;
-    }
 
-    protected function parseCitationResponse(string $content): array
-    {
-        $content = $this->extractJsonFromMarkdown($content);
-        
-        $decoded = json_decode($content, true);
+        $mapped = [];
+        foreach ($entries as $entry) {
+            $index = $entry['index'] ?? $this->matchQueryIndex($entry['query'] ?? null, $chunk);
+            if ($index === null) {
+                continue;
+            }
 
-        if (!is_array($decoded)) {
-            return [
-                'citation_found' => false,
-                'confidence' => 0,
-                'citation_references' => [],
-                'explanation' => 'Model returned non-JSON payload',
-                'raw_response' => $this->truncateRaw($content),
+            $refs = array_values(array_filter(
+                (array) ($entry['target_urls'] ?? $entry['citation_references'] ?? []),
+                fn ($url) => $targetDomain ? $this->isTargetDomain($this->normalizeDomain($url), $targetDomain) : true
+            ));
+
+            $mapped[$index] = [
+                'provider' => $providerAlias,
+                'citation_found' => (bool) ($entry['target_cited'] ?? $entry['citation_found'] ?? false),
+                'confidence' => (float) ($entry['confidence'] ?? 0),
+                'citation_references' => $refs,
+                'competitors' => $this->normalizeCompetitors($entry['competitors'] ?? [], $targetDomain),
+                'explanation' => $entry['notes'] ?? ($entry['explanation'] ?? ''),
+                'raw_response' => Str::limit($text, 12000, '... [truncated]'),
             ];
         }
 
-        return [
-            'citation_found' => (bool) ($decoded['citation_found'] ?? false),
-            'confidence' => (int) ($decoded['confidence'] ?? 0),
-            'citation_references' => array_values(array_filter(
-                $decoded['citation_references'] ?? [],
-                fn ($item) => is_string($item) && $item !== ''
-            )),
-            'explanation' => $decoded['explanation'] ?? '',
-        ];
-    }
-
-    protected function truncateRaw(mixed $raw): string
-    {
-        $serialized = is_string($raw) ? $raw : json_encode($raw, JSON_PRETTY_PRINT);
-        if (!$serialized) {
-            return '';
-        }
-
-        return Str::limit($serialized, self::RAW_RESPONSE_LIMIT, '... [truncated]');
-    }
-
-    protected function providerUnavailablePayload(string $providerKey, string $reason): array
-    {
-        return [
-            'citation_found' => false,
-            'confidence' => 0,
-            'citation_references' => [],
-            'explanation' => $reason,
-            'raw_response' => null,
-            'provider' => $providerKey,
-        ];
-    }
-
-    protected function errorPayload(string $providerKey, string $message): array
-    {
-        return [
-            'citation_found' => false,
-            'confidence' => 0,
-            'citation_references' => [],
-            'explanation' => $message,
-            'raw_response' => null,
-            'provider' => $providerKey,
-        ];
-    }
-
-    protected function providerAvailable(string $provider): bool
-    {
-        $failures = Cache::get($this->providerCacheKey($provider), 0);
-        $limit = config("citations.{$provider}.circuit_breaker", 5);
-
-        return $failures < $limit;
-    }
-
-    protected function recordProviderFailure(string $provider): void
-    {
-        $key = $this->providerCacheKey($provider);
-        $count = Cache::increment($key);
-        if ($count === 1) {
-            Cache::put($key, 1, now()->addMinutes(15));
-        }
-    }
-
-    protected function resetProviderFailures(string $provider): void
-    {
-        Cache::forget($this->providerCacheKey($provider));
-    }
-
-    protected function providerCacheKey(string $provider): string
-    {
-        return sprintf('citations:%s:failures', $provider);
-    }
-
-    /**
-     * Analyze keyword intent and AI visibility
-     *
-     * @param string $keyword
-     * @return array{intent_category: string, intent: string, difficulty: string, required_entities: array, competitiveness: string, structured_data_helpful: array, ai_visibility_score: float, explanation: string}
-     */
-    public function analyzeKeywordIntent(string $keyword): array
-    {
-        if (!$this->canUseOpenAi() && !$this->canUseGemini()) {
-            Log::info('Keyword intent analysis skipped - no LLM provider available');
-            return $this->defaultIntentAnalysis($keyword);
-        }
-
-        $template = $this->promptSections('keyword/intent_analysis');
-        $messages = [
-            [
-                'role' => 'system',
-                'content' => $template['system'] ?? '',
-            ],
-            [
-                'role' => 'user',
-                'content' => $this->replacePlaceholders($template['user'] ?? '', [
-                    '{keyword}' => $keyword,
-                ]),
-            ],
-        ];
-
-        Log::info('Calling LLM for keyword intent analysis', [
-            'keyword' => $keyword,
-            'provider' => $this->canUseOpenAi() ? 'openai' : 'gemini',
-        ]);
-
-        try {
-            $startTime = microtime(true);
-            
-            if ($this->canUseOpenAi()) {
-                $response = $this->callOpenAi($messages, 0.3);
-                $content = $response['choices'][0]['message']['content'] ?? '{}';
-            } else {
-                $response = $this->callGemini($template['system'] ?? '', $messages[1]['content']);
-                $content = $response['candidates'][0]['content']['parts'][0]['text'] ?? '{}';
+        foreach ($chunk as $index => $query) {
+            if (!isset($mapped[$index])) {
+                $mapped[$index] = $this->defaultCitationResult($providerAlias, $query, 'Unable to parse provider response');
             }
-            
-            $duration = round((microtime(true) - $startTime) * 1000, 2);
-
-            $parsed = $this->parseIntentResponse($content);
-            
-            Log::info('Keyword intent analysis successful', [
-                'keyword' => $keyword,
-                'intent_category' => $parsed['intent_category'],
-                'ai_visibility_score' => $parsed['ai_visibility_score'],
-                'duration_ms' => $duration,
-            ]);
-
-            return $parsed;
-        } catch (\Throwable $e) {
-            Log::error('Keyword intent analysis failed', [
-                'keyword' => $keyword,
-                'error' => $e->getMessage(),
-            ]);
-            return $this->defaultIntentAnalysis($keyword);
-        }
-    }
-
-    /**
-     * Analyze multiple keywords in batch
-     *
-     * @param array<string> $keywords
-     * @return array<string, array>
-     */
-    public function analyzeKeywordIntents(array $keywords): array
-    {
-        $results = [];
-        
-        foreach ($keywords as $keyword) {
-            $results[$keyword] = $this->analyzeKeywordIntent($keyword);
-            usleep(100000);
         }
 
-        return $results;
+        return $mapped;
     }
 
-    /**
-     * Parse intent analysis response
-     */
-    protected function parseIntentResponse(string $content): array
+    protected function matchQueryIndex(?string $query, array $chunk): ?int
     {
-        $jsonMatch = [];
-        if (preg_match('/\{[^}]+\}/s', $content, $jsonMatch)) {
-            $decoded = json_decode($jsonMatch[0], true);
+        if (!$query) {
+            return null;
+        }
+
+        foreach ($chunk as $index => $value) {
+            if (Str::lower(trim($value)) === Str::lower(trim($query))) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    protected function normalizeCompetitors(array $competitors, ?string $targetDomain): array
+    {
+        $normalized = [];
+
+        foreach ($competitors as $competitor) {
+            $domain = $this->normalizeDomain($competitor['domain'] ?? ($competitor['url'] ?? null));
+            if (!$domain) {
+                continue;
+            }
+
+            if ($targetDomain && $this->isTargetDomain($domain, $targetDomain)) {
+                continue;
+            }
+
+            $key = $this->rootDomain($domain);
+            if (isset($normalized[$key])) {
+                continue;
+            }
+
+            $normalized[$key] = [
+                'domain' => $key,
+                'url' => $competitor['url'] ?? null,
+                'reason' => $competitor['reason'] ?? '',
+            ];
+
+            if (count($normalized) >= 2) {
+                break;
+            }
+        }
+
+        return array_values($normalized);
+    }
+
+    protected function parseQueriesFromText(string $text): array
+    {
+        $json = JsonExtractor::extract($text);
+
+        if ($json) {
+            $decoded = json_decode($json, true);
             if (is_array($decoded)) {
-                return $this->normalizeIntentResponse($decoded);
+                if (isset($decoded['queries']) && is_array($decoded['queries'])) {
+                    $decoded = $decoded['queries'];
+                }
+
+                if (Arr::isList($decoded)) {
+                    return array_values(array_filter(array_map(
+                        fn ($item) => is_string($item) ? trim($item) : null,
+                        $decoded
+                    )));
+                }
             }
         }
 
-        $decoded = json_decode($content, true);
-        if (is_array($decoded)) {
-            return $this->normalizeIntentResponse($decoded);
-        }
-
-        return $this->defaultIntentAnalysis('');
+        $lines = array_map('trim', preg_split('/\r\n|\r|\n/', $text));
+        return array_values(array_filter($lines, fn ($line) => strlen($line) > 2));
     }
 
-    /**
-     * Normalize intent response to ensure all fields are present
-     */
+    protected function generateWithAnyProvider(array $messages): ?array
+    {
+        foreach ($this->preferredProviders() as $provider) {
+            if (!$this->canUseProvider($provider)) {
+                continue;
+            }
+
+            try {
+                $raw = $this->sendWithProvider($provider, $messages, [
+                    'temperature' => 0.4,
+                    'response_format' => ['type' => 'json_object'],
+                ]);
+
+                $this->breaker->clearFailures($provider);
+
+                return [
+                    'provider' => $provider,
+                    'raw' => $raw,
+                ];
+            } catch (\Throwable $e) {
+                $this->breaker->recordFailure($provider);
+                Log::error('Query generation failed', [
+                    'provider' => $provider,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return null;
+    }
+
     protected function normalizeIntentResponse(array $data): array
     {
         return [
-            'intent_category' => $data['intent_category'] ?? 'informational',
+            'intent_category' => $data['intent_category'] ?? $data['intentCategory'] ?? 'informational',
             'intent' => $data['intent'] ?? '',
             'difficulty' => $data['difficulty'] ?? 'medium',
-            'required_entities' => $data['required_entities'] ?? [],
+            'required_entities' => $data['required_entities'] ?? $data['requiredEntities'] ?? [],
             'competitiveness' => $data['competitiveness'] ?? 'medium',
-            'structured_data_helpful' => $data['structured_data_helpful'] ?? [],
-            'ai_visibility_score' => (float) ($data['ai_visibility_score'] ?? 50.0),
-            'explanation' => $data['explanation'] ?? '',
+            'structured_data_helpful' => $data['structured_data_helpful'] ?? $data['structuredDataHelpful'] ?? ['FAQPage', 'Article'],
+            'ai_visibility_score' => isset($data['ai_visibility_score'])
+                ? (float) $data['ai_visibility_score']
+                : (isset($data['score']) ? (float) $data['score'] : 50.0),
+            'explanation' => $data['explanation'] ?? ($data['note'] ?? ''),
         ];
     }
 
-    /**
-     * Default intent analysis when LLM is unavailable
-     */
-    protected function defaultIntentAnalysis(string $keyword): array
+    protected function defaultIntentFallback(?string $reason = null): array
     {
-        $isQuestion = preg_match('/^(what|how|why|when|where|who|can|should|is|are|do|does)/i', $keyword);
-        $isCommercial = preg_match('/(buy|price|cost|cheap|best|review|compare)/i', $keyword);
-        
-        $intentCategory = 'informational';
-        if ($isCommercial) {
-            $intentCategory = 'commercial';
-        } elseif (preg_match('/(login|sign in|website|official)/i', $keyword)) {
-            $intentCategory = 'navigational';
-        } elseif (preg_match('/(buy|purchase|order)/i', $keyword)) {
-            $intentCategory = 'transactional';
-        }
-
-        $aiVisibilityScore = 50.0;
-        if ($isQuestion) {
-            $aiVisibilityScore = 75.0;
-        }
-        if ($isCommercial) {
-            $aiVisibilityScore = 40.0;
-        }
-
         return [
-            'intent_category' => $intentCategory,
-            'intent' => 'Automated analysis',
+            'intent_category' => 'informational',
+            'intent' => 'unknown',
             'difficulty' => 'medium',
             'required_entities' => [],
             'competitiveness' => 'medium',
             'structured_data_helpful' => ['FAQPage', 'Article'],
-            'ai_visibility_score' => $aiVisibilityScore,
-            'explanation' => 'Default analysis (LLM unavailable)',
+            'ai_visibility_score' => 0.0,
+            'explanation' => $reason ?? 'LLM provider unavailable',
         ];
     }
 
-}
+    protected function defaultCitationResult(string $providerAlias, string $query, string $reason): array
+    {
+        return [
+            'provider' => $providerAlias,
+            'citation_found' => false,
+            'confidence' => 0.0,
+            'citation_references' => [],
+            'competitors' => [],
+            'explanation' => $reason,
+            'raw_response' => null,
+            'query' => $query,
+        ];
+    }
 
+    protected function providerAlias(string $provider): string
+    {
+        return $provider === 'openai' ? 'gpt' : 'gemini';
+    }
+
+    protected function normalizeDomain(?string $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        $host = parse_url($value, PHP_URL_HOST) ?: $value;
+        $host = strtolower(trim($host));
+        $host = preg_replace('/^www\./', '', $host);
+
+        return $host ?: null;
+    }
+
+    protected function rootDomain(?string $domain): ?string
+    {
+        if (!$domain) {
+            return null;
+        }
+
+        $parts = explode('.', $domain);
+        if (count($parts) <= 2) {
+            return $domain;
+        }
+
+        return implode('.', array_slice($parts, -2));
+    }
+
+    protected function isTargetDomain(?string $domain, ?string $targetDomain): bool
+    {
+        if (!$domain || !$targetDomain) {
+            return false;
+        }
+
+        return $this->rootDomain($domain) === $this->rootDomain($targetDomain);
+    }
+}

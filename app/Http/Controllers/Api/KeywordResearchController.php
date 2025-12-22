@@ -4,12 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\DTOs\KeywordResearchRequestDTO;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\KeywordResearchRequest;
 use App\Services\KeywordService;
+use App\Traits\HasApiResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
 
 class KeywordResearchController extends Controller
 {
+    use HasApiResponse;
+
     protected KeywordService $keywordService;
 
     public function __construct(KeywordService $keywordService)
@@ -17,21 +20,9 @@ class KeywordResearchController extends Controller
         $this->keywordService = $keywordService;
     }
 
-    public function create(Request $request)
+    public function create(KeywordResearchRequest $request)
     {
-        $validated = $request->validate([
-            'query' => 'required|string|max:255',
-            'project_id' => 'nullable|integer|exists:projects,id',
-            'language_code' => 'nullable|string|max:10',
-            'geo_target_id' => 'nullable|integer',
-            'max_keywords' => 'nullable|integer|min:1|max:5000',
-            'enable_google_planner' => 'nullable|boolean',
-            'enable_scraper' => 'nullable|boolean',
-            'enable_answerthepublic' => 'nullable|boolean',
-            'enable_clustering' => 'nullable|boolean',
-            'enable_intent_scoring' => 'nullable|boolean',
-        ]);
-
+        $validated = $request->validated();
         $dto = KeywordResearchRequestDTO::fromArray($validated);
         $job = $this->keywordService->createKeywordResearch($dto);
 
@@ -62,4 +53,3 @@ class KeywordResearchController extends Controller
         return $this->keywordService->listKeywordResearchJobs();
     }
 }
-

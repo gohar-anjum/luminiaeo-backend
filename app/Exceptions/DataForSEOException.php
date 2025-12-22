@@ -35,4 +35,3 @@ class DataForSEOException extends Exception
         ], $this->statusCode);
     }
 }
-
