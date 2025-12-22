@@ -5,9 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-
 client = TestClient(app)
-
 
 def test_detect_endpoint_returns_summary():
     payload = {
@@ -36,4 +34,3 @@ def test_detect_endpoint_returns_summary():
     data = response.json()
     assert data["summary"]["high_risk_count"] + data["summary"]["medium_risk_count"] + data["summary"]["low_risk_count"] == 1
     assert data["items"][0]["risk_level"] in {"low", "medium", "high"}
-

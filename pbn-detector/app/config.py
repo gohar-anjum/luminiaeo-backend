@@ -3,7 +3,6 @@ from pathlib import Path
 import os
 from pydantic_settings import BaseSettings
 
-
 class Settings(BaseSettings):
     app_name: str = "PBN Detector"
     environment: str = "development"
@@ -44,8 +43,6 @@ class Settings(BaseSettings):
 
             self.redis_url = f"redis://{auth_part}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

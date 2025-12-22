@@ -9,7 +9,6 @@ import redis.asyncio as redis
 
 from app.config import get_settings
 
-
 class CacheClient:
     def __init__(self) -> None:
         settings = get_settings()
@@ -21,7 +20,7 @@ class CacheClient:
         if self._url and not self._client:
             try:
                 self._client = redis.from_url(self._url, encoding="utf-8", decode_responses=False)
-                # Test connection
+
                 await self._client.ping()
             except Exception:
                 self._client = None
@@ -44,7 +43,6 @@ class CacheClient:
         return None
 
     async def get_bytes(self, key: str) -> Optional[bytes]:
-        """Get binary data from cache"""
         if not self._client or not self._use_cache:
             return None
         try:
@@ -61,7 +59,6 @@ class CacheClient:
             pass
 
     async def set_bytes(self, key: str, value: bytes, ttl: int = 3600) -> None:
-        """Set binary data in cache"""
         if not self._client or not self._use_cache:
             return
         try:
@@ -70,7 +67,6 @@ class CacheClient:
             pass
 
     async def get_pickle(self, key: str) -> Optional[Any]:
-        """Get pickled object from cache"""
         if not self._client or not self._use_cache:
             return None
         try:
@@ -82,7 +78,6 @@ class CacheClient:
         return None
 
     async def set_pickle(self, key: str, value: Any, ttl: int = 3600) -> None:
-        """Set pickled object in cache"""
         if not self._client or not self._use_cache:
             return
         try:
@@ -92,18 +87,13 @@ class CacheClient:
             pass
 
     def _hash_key(self, text: str, prefix: str = "") -> str:
-        """Generate cache key from text"""
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
         return f"pbn:{prefix}:{text_hash}" if prefix else f"pbn:{text_hash}"
 
-
 cache_client = CacheClient()
-
 
 async def init_cache() -> None:
     await cache_client.connect()
 
-
 async def shutdown_cache() -> None:
     await cache_client.close()
-
