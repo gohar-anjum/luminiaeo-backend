@@ -19,14 +19,14 @@ class BacklinksControllerTest extends TestCase
 
         $seoTask = new SeoTask([
             'task_id' => 'task-123',
-            'domain' => 'https://example.com',
+            'domain' => 'https:
             'status' => SeoTask::STATUS_COMPLETED,
             'submitted_at' => now(),
             'completed_at' => now(),
             'result' => [
                 'backlinks' => [
                     'items' => [
-                        ['source_url' => 'https://source.example.com'],
+                        ['source_url' => 'https:
                     ],
                     'items_count' => 1,
                 ],
@@ -41,14 +41,14 @@ class BacklinksControllerTest extends TestCase
         $this->app->instance(BacklinksRepositoryInterface::class, $mock);
 
         $response = $this->postJson('/api/seo/backlinks/submit', [
-            'domain' => 'https://example.com',
+            'domain' => 'https:
             'limit' => 10,
         ]);
 
         $response->assertOk()
             ->assertJsonFragment([
                 'task_id' => 'task-123',
-                'domain' => 'https://example.com',
+                'domain' => 'https:
             ])
             ->assertJsonStructure([
                 'response' => [
@@ -68,13 +68,13 @@ class BacklinksControllerTest extends TestCase
         $mock->shouldReceive('getHarmfulBacklinks')
             ->once()
             ->andReturn([
-                ['source_url' => 'https://spam.example.com', 'risk_level' => 'high'],
+                ['source_url' => 'https:
             ]);
 
         $this->app->instance(BacklinksRepositoryInterface::class, $mock);
 
         $response = $this->postJson('/api/seo/backlinks/harmful', [
-            'domain' => 'https://example.com',
+            'domain' => 'https:
         ]);
 
         $response->assertOk()
@@ -83,4 +83,3 @@ class BacklinksControllerTest extends TestCase
             ]);
     }
 }
-

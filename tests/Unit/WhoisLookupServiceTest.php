@@ -45,4 +45,3 @@ class WhoisLookupServiceTest extends TestCase
         $this->assertNull($signals['registrar']);
     }
 }
-

@@ -10,13 +10,13 @@ class BacklinkDTOTest extends TestCase
     public function test_can_apply_whois_and_detection_data(): void
     {
         $dto = BacklinkDTO::fromArray([
-            'url_from' => 'https://example.com/post',
+            'url_from' => 'https:
             'domain_from' => 'example.com',
             'anchor' => 'buy widgets',
             'domain_rank' => 120,
             'dofollow' => true,
             'first_seen' => '2025-01-01 00:00:00',
-        ], 'https://target.com', 'task-123');
+        ], 'https:
 
         $dto->applyWhoisSignals([
             'registrar' => 'Test Registrar',
@@ -49,4 +49,3 @@ class BacklinkDTOTest extends TestCase
         $this->assertSame('flagged', $array['safe_browsing_status']);
     }
 }
-
