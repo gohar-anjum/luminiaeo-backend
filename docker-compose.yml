@@ -99,10 +99,13 @@ services:
     networks:
       - luminiaeo-network
     depends_on:
-      - mysql
-      - redis
-      - app
-    command: php artisan queue:work --tries=3 --timeout=600
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    command: php artisan queue:work --tries=3 --timeout=600 --sleep=3 --max-jobs=1000
     env_file:
       - .env
     environment:
@@ -115,6 +118,37 @@ services:
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8000
 
+  # Laravel Horizon (Queue Dashboard & Supervisor)
+  horizon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: luminiaeo_horizon
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+      - ./storage:/var/www/html/storage
+    networks:
+      - luminiaeo-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    command: php artisan horizon
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
+      - PBN_DETECTOR_URL=http://pbn-detector:8000
+
   # Keyword Clustering Service (Python)
   clustering:
     build:
@@ -124,15 +158,41 @@ services:
     restart: unless-stopped
     ports:
       - "${CLUSTERING_PORT:-8001}:8001"
+    volumes:
+      - ./keyword-clustering-service/models:/app/models
+      - ./storage/app:/app/data
     networks:
       - luminiaeo-network
     env_file:
       - .env
+    environment:
+      - CUSTOM_MODEL_PATH=/app/models/custom-keyword-clustering
+      - MODEL_NAME=sentence-transformers/all-mpnet-base-v2
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health').raise_for_status()"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
+
+  # Keyword Clustering Training Service (One-time use)
+  clustering-train:
+    build:
+      context: ./keyword-clustering-service
+      dockerfile: Dockerfile
+    container_name: luminiaeo_clustering_train
+    volumes:
+      - ./keyword-clustering-service/models:/app/models
+      - ./storage/app:/app/data
+      - ./keyword-clustering-service:/app/scripts
+    networks:
+      - luminiaeo-network
+    environment:
+      - PYTHONUNBUFFERED=1
+    profiles:
+      - training
+    # Command will be overridden when running training
+    command: ["echo", "Use: docker-compose run --rm clustering-train python train_model_complete.py /app/data/training_pairs.json"]
 
   # PBN Detector Service (Python)
   pbn-detector:
