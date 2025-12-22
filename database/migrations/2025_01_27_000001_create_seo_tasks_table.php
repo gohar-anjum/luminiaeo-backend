@@ -23,7 +23,6 @@ return new class extends Migration
             $table->timestamp('failed_at')->nullable();
             $table->timestamps();
 
-            // Indexes for common queries
             $table->index(['type', 'status']);
             $table->index(['domain', 'status']);
             $table->index(['status', 'created_at']);
@@ -35,4 +34,3 @@ return new class extends Migration
         Schema::dropIfExists('seo_tasks');
     }
 };
-

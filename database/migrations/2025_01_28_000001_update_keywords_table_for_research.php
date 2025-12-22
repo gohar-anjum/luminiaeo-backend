@@ -6,12 +6,15 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        // First create keyword_clusters table
+
+        if (!Schema::hasTable('keyword_research_jobs')) {
+
+            return;
+        }
+
+        if (!Schema::hasTable('keyword_clusters')) {
         Schema::create('keyword_clusters', function (Blueprint $table) {
             $table->id();
             $table->foreignId('keyword_research_job_id')->constrained()->cascadeOnDelete();
@@ -23,20 +26,25 @@ return new class extends Migration
             $table->float('ai_visibility_projection')->nullable();
             $table->integer('keyword_count')->default(0);
             $table->timestamps();
-            
+
             $table->index(['keyword_research_job_id']);
         });
+        }
+
+        if (!Schema::hasTable('keywords')) {
+            return;
+        }
 
         Schema::table('keywords', function (Blueprint $table) {
             $table->foreignId('keyword_research_job_id')->nullable()->after('id')->constrained('keyword_research_jobs')->onDelete('cascade');
             $table->foreignId('keyword_cluster_id')->nullable()->after('keyword_research_job_id')->constrained('keyword_clusters')->onDelete('set null');
-            $table->string('source')->nullable()->after('keyword'); // google_planner, scraper, answerthepublic, etc.
+            $table->string('source')->nullable()->after('keyword');
             $table->json('question_variations')->nullable()->after('intent');
             $table->json('long_tail_versions')->nullable()->after('question_variations');
-            $table->float('ai_visibility_score')->nullable()->after('cpc'); // 0-100 score
-            $table->string('intent_category')->nullable()->after('intent'); // informational, navigational, transactional, commercial
-            $table->json('intent_metadata')->nullable()->after('intent_category'); // LLM analysis results
-            $table->json('semantic_data')->nullable()->after('intent_metadata'); // embeddings, similarity scores
+            $table->float('ai_visibility_score')->nullable()->after('cpc');
+            $table->string('intent_category')->nullable()->after('intent');
+            $table->json('intent_metadata')->nullable()->after('intent_category');
+            $table->json('semantic_data')->nullable()->after('intent_metadata');
             $table->string('language_code')->default('en')->after('location');
             $table->integer('geoTargetId')->nullable()->after('language_code');
             $table->index(['keyword_research_job_id']);
@@ -48,21 +56,18 @@ return new class extends Migration
         Schema::table('keyword_research_jobs', function (Blueprint $table) {
             $table->foreignId('project_id')->nullable()->after('user_id')->constrained()->onDelete('cascade');
             $table->string('language_code')->default('en')->after('query');
-            $table->integer('geoTargetId')->default(2840)->after('language_code'); // USA default
-            $table->json('settings')->nullable()->after('status'); // Additional settings like max_keywords, etc.
-            $table->json('progress')->nullable()->after('settings'); // Track progress of different stages
+            $table->integer('geoTargetId')->default(2840)->after('language_code');
+            $table->json('settings')->nullable()->after('status');
+            $table->json('progress')->nullable()->after('settings');
             $table->text('error_message')->nullable()->after('result');
             $table->timestamp('started_at')->nullable()->after('error_message');
             $table->timestamp('completed_at')->nullable()->after('started_at');
-            
+
             $table->index(['user_id', 'status']);
             $table->index(['project_id']);
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::table('keywords', function (Blueprint $table) {
@@ -106,4 +111,3 @@ return new class extends Migration
         });
     }
 };
-

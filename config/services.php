@@ -2,18 +2,6 @@
 
 return [
 
-    /*
-    |--------------------------------------------------------------------------
-    | Third Party Services
-    |--------------------------------------------------------------------------
-    |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
-    |
-    */
-
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],
@@ -48,16 +36,16 @@ return [
         'login'    => env('DATAFORSEO_LOGIN'),
         'password' => env('DATAFORSEO_PASSWORD'),
         'timeout'  => env('DATAFORSEO_TIMEOUT', 60),
-        'cache_ttl' => env('DATAFORSEO_CACHE_TTL', 86400), // 24 hours in seconds
+        'cache_ttl' => env('DATAFORSEO_CACHE_TTL', 86400),
         'backlinks_limit' => env('DATAFORSEO_BACKLINKS_LIMIT', 100),
         'summary_limit' => env('DATAFORSEO_SUMMARY_LIMIT', 100),
     ],
 
     'whoisxml' => [
-        'base_url' => env('WHOISXML_BASE_URL', 'https://www.whoisxmlapi.com/whoisserver/WhoisService'),
+        'base_url' => env('WHOISXML_BASE_URL', 'https://www.whoisxmlapi.com'),
         'api_key' => env('WHOISXML_API_KEY'),
         'timeout' => env('WHOISXML_TIMEOUT', 20),
-        'cache_ttl' => env('WHOISXML_CACHE_TTL', 604800), // 7 days
+        'cache_ttl' => env('WHOISXML_CACHE_TTL', 604800),
     ],
 
     'pbn_detector' => [
@@ -68,10 +56,10 @@ return [
     ],
 
     'safe_browsing' => [
-        'base_url' => env('SAFE_BROWSING_BASE_URL', 'https://safebrowsing.googleapis.com/v4/threatMatches:find'),
+        'base_url' => env('SAFE_BROWSING_BASE_URL', 'https://safebrowsing.googleapis.com/v4'),
         'api_key' => env('SAFE_BROWSING_API_KEY'),
         'timeout' => env('SAFE_BROWSING_TIMEOUT', 15),
-        'cache_ttl' => env('SAFE_BROWSING_CACHE_TTL', 604800), // 7 days
+        'cache_ttl' => env('SAFE_BROWSING_CACHE_TTL', 604800),
     ],
 
     'answerthepublic' => [
@@ -82,6 +70,25 @@ return [
     'keyword_clustering' => [
         'url' => env('KEYWORD_CLUSTERING_SERVICE_URL'),
         'timeout' => env('KEYWORD_CLUSTERING_TIMEOUT', 120),
+    ],
+
+    'serp' => [
+        'base_url' => env('SERP_API_BASE_URL', 'https://serpapi.com'),
+        'api_key' => env('SERP_API_KEY'),
+        'timeout' => env('SERP_API_TIMEOUT', 60),
+        'cache_ttl' => env('SERP_API_CACHE_TTL', 2592000),
+    ],
+
+    'faq' => [
+        'timeout' => env('FAQ_GENERATOR_TIMEOUT', 60),
+        'cache_ttl' => env('FAQ_GENERATOR_CACHE_TTL', 86400),
+    ],
+
+    'alsoasked' => [
+        'base_url' => env('ALSOASKED_BASE_URL', 'https://alsoaskedapi.com/v1'),
+        'api_key' => env('ALSOASKED_API_KEY'),
+        'timeout' => env('ALSOASKED_TIMEOUT', 30),
+        'cache_ttl' => env('ALSOASKED_CACHE_TTL', 86400),
     ],
 
 ];

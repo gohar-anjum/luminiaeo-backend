@@ -13,6 +13,14 @@ while ! nc -z redis 6379; do
 done
 echo "Redis is ready!"
 
+# Fix permissions for storage and cache directories
+echo "Setting permissions for storage and cache directories..."
+mkdir -p /var/www/html/storage/framework/{sessions,views,cache}
+mkdir -p /var/www/html/storage/logs
+mkdir -p /var/www/html/bootstrap/cache
+chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+
 # Auto-generate APP_KEY if missing or empty
 if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
   echo "APP_KEY is missing. Generating application key..."
