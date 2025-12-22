@@ -9,50 +9,33 @@ from app.schemas import BacklinkSignal
 from app.services.classifier import classifier_service
 from app.services.lightweight_classifier import lightweight_classifier
 
-
 class EnsembleClassifier:
-    """
-    Ensemble classifier combining multiple models for better accuracy.
-    
-    Uses weighted voting of:
-    - Lightweight rule-based classifier
-    - ML model (if available)
-    - Rule-based signals
-    """
-    
+
     def __init__(self) -> None:
-        # Weights for ensemble voting (tune based on validation)
+
         self.weights = {
             'lightweight': 0.4,
             'ml_model': 0.3,
             'rule_based': 0.3,
         }
-    
+
     def predict_proba(
-        self, 
-        features: np.ndarray, 
+        self,
+        features: np.ndarray,
         backlink: BacklinkSignal,
         rule_scores: dict[str, float],
         base_probability: float
     ) -> Tuple[float, float]:
-        """
-        Predict probability using ensemble of classifiers.
-        
-        Returns:
-            Tuple of (probability, confidence)
-        """
         probabilities = []
         weights = []
-        
-        # 1. Lightweight classifier
+
         try:
             lightweight_prob = lightweight_classifier.predict_proba(features, backlink)
             probabilities.append(lightweight_prob)
             weights.append(self.weights['lightweight'])
         except Exception as e:
             logger.warning("Lightweight classifier failed in ensemble", error=str(e))
-        
-        # 2. ML model (if available)
+
         if classifier_service.use_ml_model:
             try:
                 ml_prob = classifier_service.predict_proba(features, backlink)
@@ -60,42 +43,37 @@ class EnsembleClassifier:
                 weights.append(self.weights['ml_model'])
             except Exception as e:
                 logger.warning("ML model failed in ensemble", error=str(e))
-        
-        # 3. Rule-based probability (from rule scores)
+
         if rule_scores:
             try:
-                # Convert rule scores to probability
+
                 rule_boost = sum(rule_scores.values())
-                rule_prob = min(rule_boost, 1.0)  # Normalize
+                rule_prob = min(rule_boost, 1.0)
                 probabilities.append(rule_prob)
                 weights.append(self.weights['rule_based'])
             except Exception as e:
                 logger.warning("Rule-based probability failed in ensemble", error=str(e))
-        
-        # Fallback to base probability if ensemble fails
+
         if not probabilities:
             return base_probability, 0.5
-        
-        # Normalize weights
+
         total_weight = sum(weights)
         if total_weight == 0:
             return base_probability, 0.5
-        
+
         normalized_weights = [w / total_weight for w in weights]
-        
-        # Weighted average
+
         ensemble_prob = sum(p * w for p, w in zip(probabilities, normalized_weights))
-        
-        # Calculate confidence based on agreement
+
         if len(probabilities) > 1:
-            # High agreement = high confidence
+
             std_dev = np.std(probabilities)
-            confidence = 1.0 - min(std_dev, 0.5)  # Lower std = higher confidence
+            confidence = 1.0 - min(std_dev, 0.5)
         else:
-            confidence = 0.7  # Single model = moderate confidence
-        
+            confidence = 0.7
+
         return float(np.clip(ensemble_prob, 0.0, 1.0)), float(np.clip(confidence, 0.0, 1.0))
-    
+
     def predict_proba_batch(
         self,
         features_matrix: np.ndarray,
@@ -103,18 +81,12 @@ class EnsembleClassifier:
         rule_scores_list: List[dict[str, float]],
         base_probabilities: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Batch prediction using ensemble.
-        
-        Returns:
-            Tuple of (probabilities, confidences)
-        """
         if len(features_matrix) != len(backlinks):
             raise ValueError("Features matrix and backlinks must have same length")
-        
+
         probabilities = []
         confidences = []
-        
+
         for i, backlink in enumerate(backlinks):
             prob, conf = self.predict_proba(
                 features_matrix[i],
@@ -124,9 +96,7 @@ class EnsembleClassifier:
             )
             probabilities.append(prob)
             confidences.append(conf)
-        
+
         return np.array(probabilities), np.array(confidences)
 
-
 ensemble_classifier = EnsembleClassifier()
-

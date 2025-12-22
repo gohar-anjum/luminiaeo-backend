@@ -7,7 +7,6 @@ from loguru import logger
 
 from app.config import get_settings
 
-
 class IpInfoService:
     def __init__(self) -> None:
         settings = get_settings()
@@ -41,6 +40,4 @@ class IpInfoService:
                 logger.warning("IP lookup failed", ip=ip_address, error=str(exc))
                 return {}
 
-
 ipinfo_service = IpInfoService()
-
