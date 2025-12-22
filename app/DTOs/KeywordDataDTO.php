@@ -38,4 +38,3 @@ class KeywordDataDTO
         ], fn($value) => $value !== null);
     }
 }
-

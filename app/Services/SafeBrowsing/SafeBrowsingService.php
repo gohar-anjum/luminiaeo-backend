@@ -57,7 +57,7 @@ class SafeBrowsingService
             } catch (RequestException $e) {
                 $errorResponse = $e->response?->json();
                 $statusCode = $e->response?->status();
-                
+
                 if ($statusCode === 403) {
                     $errorReason = $errorResponse['error']['details'][0]['reason'] ?? null;
                     if ($errorReason === 'API_KEY_HTTP_REFERRER_BLOCKED') {
@@ -123,4 +123,3 @@ class SafeBrowsingService
         ];
     }
 }
-

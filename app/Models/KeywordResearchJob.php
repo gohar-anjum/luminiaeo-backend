@@ -2,12 +2,14 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class KeywordResearchJob extends Model
 {
+    use HasFactory;
     protected $fillable = [
         'user_id',
         'project_id',
@@ -31,7 +33,6 @@ class KeywordResearchJob extends Model
         'completed_at' => 'datetime',
     ];
 
-    // Status constants
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
     public const STATUS_COMPLETED = 'completed';
@@ -82,4 +83,3 @@ class KeywordResearchJob extends Model
         return $query->where('user_id', $userId);
     }
 }
-

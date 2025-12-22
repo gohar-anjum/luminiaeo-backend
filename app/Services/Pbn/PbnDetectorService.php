@@ -90,4 +90,3 @@ class PbnDetectorService
         return hash_hmac('sha256', $data, $this->secret);
     }
 }
-

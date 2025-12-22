@@ -21,6 +21,7 @@ class ProcessCitationTaskJob implements ShouldQueue
 
     public function __construct(public int $taskId)
     {
+        $this->onQueue('citations');
     }
 
     public function handle(CitationRepositoryInterface $repository, CitationService $service): void
@@ -45,4 +46,3 @@ class ProcessCitationTaskJob implements ShouldQueue
         $service->dispatchChunkJobs($task);
     }
 }
-

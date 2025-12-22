@@ -30,4 +30,3 @@ class BacklinksHarmfulRequest extends FormRequest
         }
     }
 }
-

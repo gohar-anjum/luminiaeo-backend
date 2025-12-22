@@ -16,29 +16,38 @@ class SemanticClusteringService
         $this->clusteringServiceUrl = config('services.keyword_clustering.url');
     }
 
-    public function clusterKeywords(array $keywords, int $numClusters = 5): array
+    public function clusterKeywords(array $keywords, int $numClusters = 5, bool $useRuleBased = true): array
     {
         if (empty($keywords)) {
             return ['clusters' => [], 'keyword_cluster_map' => []];
         }
 
         if ($this->clusteringServiceUrl) {
-            return $this->clusterViaPythonService($keywords, $numClusters);
+            return $this->clusterViaPythonService($keywords, $numClusters, $useRuleBased);
         }
 
         return $this->simpleClustering($keywords, $numClusters);
     }
 
-    protected function clusterViaPythonService(array $keywords, int $numClusters): array
+    protected function clusterViaPythonService(array $keywords, int $numClusters, bool $useRuleBased = true): array
     {
         try {
             $keywordTexts = array_map(fn($k) => $k->keyword, $keywords);
 
+            $endpoint = $useRuleBased ? '/cluster-rule-based' : '/cluster';
+            $payload = [
+                'keywords' => $keywordTexts,
+                'num_clusters' => $numClusters,
+            ];
+
+            if (!$useRuleBased) {
+                $payload['use_ml'] = true;
+            } else {
+                $payload['similarity_threshold'] = 0.3;
+            }
+
             $response = Http::timeout(120)
-                ->post("{$this->clusteringServiceUrl}/cluster", [
-                    'keywords' => $keywordTexts,
-                    'num_clusters' => $numClusters,
-                ]);
+                ->post("{$this->clusteringServiceUrl}{$endpoint}", $payload);
 
             if (!$response->successful()) {
                 Log::warning('Clustering service failed, using fallback', [
@@ -56,21 +65,21 @@ class SemanticClusteringService
 
             foreach ($clusterMap as $keyword => $clusterId) {
                 $keywordClusterMap[$keyword] = $clusterId;
-                
+
                 if (!isset($clusters[$clusterId])) {
                     $clusters[$clusterId] = [
                         'keywords' => [],
                         'label' => $clusterLabels[$clusterId] ?? "Cluster " . ($clusterId + 1),
                     ];
                 }
-                
+
                 $clusters[$clusterId]['keywords'][] = $keyword;
             }
 
             $clusterDTOs = [];
             foreach ($clusters as $clusterId => $clusterData) {
                 $keywordsInCluster = array_filter($keywords, fn($k) => in_array($k->keyword, $clusterData['keywords']));
-                
+
                 $clusterDTOs[] = new ClusterDataDTO(
                     topicName: $clusterData['label'],
                     keywordCount: count($clusterData['keywords']),
@@ -97,7 +106,7 @@ class SemanticClusteringService
         foreach ($keywords as $keyword) {
             $firstWord = explode(' ', $keyword->keyword)[0] ?? $keyword->keyword;
             $groupKey = substr(strtolower($firstWord), 0, 3);
-            
+
             if (!isset($groups[$groupKey])) {
                 $groups[$groupKey] = [];
             }
@@ -112,7 +121,7 @@ class SemanticClusteringService
 
         foreach ($sortedGroups as $groupKey => $groupKeywords) {
             $keywordTexts = array_map(fn($k) => $k->keyword, $groupKeywords);
-            
+
             foreach ($groupKeywords as $keyword) {
                 $keywordClusterMap[$keyword->keyword] = $clusterId;
             }
@@ -167,7 +176,7 @@ class SemanticClusteringService
     protected function extractQuestions(array $keywords): array
     {
         $questions = [];
-        
+
         foreach ($keywords as $keyword) {
             if ($keyword->questionVariations) {
                 $questions = array_merge($questions, $keyword->questionVariations);
@@ -179,4 +188,3 @@ class SemanticClusteringService
         return array_unique(array_slice($questions, 0, 10));
     }
 }
-

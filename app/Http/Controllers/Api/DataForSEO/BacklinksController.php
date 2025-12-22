@@ -45,7 +45,6 @@ class BacklinksController extends Controller
                 $backlinks = $payload['backlinks'];
             }
 
-
             return $this->responseModifier
                 ->setData([
                     'task_id' => $seoTask->task_id,

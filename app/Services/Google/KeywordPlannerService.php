@@ -13,8 +13,8 @@ class KeywordPlannerService
 {
     public function getKeywordIdeas(
         string $seedKeyword,
-        string $languageId = '1000', // English
-        string $geoTargetId = '2840', // USA
+        string $languageId = '1000',
+        string $geoTargetId = '2840',
         ?int $maxResults = null
     ): array {
         try {
@@ -37,7 +37,7 @@ class KeywordPlannerService
 
             $ideas = [];
             $count = 0;
-            
+
             foreach ($response->iterateAllElements() as $result) {
                 if ($maxResults && $count >= $maxResults) {
                     break;
@@ -50,9 +50,9 @@ class KeywordPlannerService
                 if ($metrics && $metrics->getCompetition()) {
                     $competitionEnum = $metrics->getCompetition();
                     $competitionValue = match ($competitionEnum) {
-                        1 => 0.0, // LOW
-                        2 => 0.5, // MEDIUM
-                        3 => 1.0, // HIGH
+                        1 => 0.0,
+                        2 => 0.5,
+                        3 => 1.0,
                         default => null,
                     };
                 }

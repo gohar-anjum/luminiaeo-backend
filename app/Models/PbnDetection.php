@@ -28,4 +28,3 @@ class PbnDetection extends Model
         'analysis_completed_at' => 'datetime',
     ];
 }
-

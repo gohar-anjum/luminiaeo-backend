@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\DataForSEO;
 use App\Exceptions\DataForSEOException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SearchVolumeRequest;
+use App\Http\Requests\KeywordsForSiteRequest;
 use App\Services\ApiResponseModifier;
 use App\Services\DataForSEO\DataForSEOService;
 use Illuminate\Http\JsonResponse;
@@ -67,6 +68,68 @@ class DataForSEOController extends Controller
                 ->response();
         } catch (\Exception $e) {
             Log::error('Unexpected error in search volume', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return $this->responseModifier
+                ->setMessage('An unexpected error occurred')
+                ->setResponseCode(500)
+                ->response();
+        }
+    }
+
+    public function keywordsForSite(KeywordsForSiteRequest $request): JsonResponse
+    {
+        try {
+            $validated = $request->validated();
+
+            $results = $this->service->getKeywordsForSite(
+                $validated['target'],
+                $validated['location_code'],
+                $validated['language_code'],
+                $validated['search_partners'],
+                $validated['date_from'] ?? null,
+                $validated['date_to'] ?? null,
+                $validated['include_serp_info'] ?? false,
+                $validated['tag'] ?? null,
+                $validated['limit'] ?? null
+            );
+
+            $data = array_map(function ($dto) {
+                return $dto->toArray();
+            }, $results);
+
+            Log::info('Keywords for site request completed', [
+                'target' => $validated['target'],
+                'results_count' => count($data),
+            ]);
+
+            return $this->responseModifier
+                ->setData($data)
+                ->setMessage('Keywords for site retrieved successfully')
+                ->response();
+        } catch (InvalidArgumentException $e) {
+            Log::warning('Invalid request for keywords for site', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->responseModifier
+                ->setMessage($e->getMessage())
+                ->setResponseCode(422)
+                ->response();
+        } catch (DataForSEOException $e) {
+            Log::error('DataForSEO error in keywords for site', [
+                'error' => $e->getMessage(),
+                'error_code' => $e->getErrorCode(),
+            ]);
+
+            return $this->responseModifier
+                ->setMessage($e->getMessage())
+                ->setResponseCode($e->getStatusCode())
+                ->response();
+        } catch (\Exception $e) {
+            Log::error('Unexpected error in keywords for site', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);

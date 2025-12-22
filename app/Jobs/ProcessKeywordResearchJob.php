@@ -16,7 +16,7 @@ class ProcessKeywordResearchJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $tries = 2;
-    public $timeout = 600; // 10 minutes
+    public $timeout = 600;
 
     public function __construct(public int $jobId)
     {
@@ -72,4 +72,3 @@ class ProcessKeywordResearchJob implements ShouldQueue
         }
     }
 }
-

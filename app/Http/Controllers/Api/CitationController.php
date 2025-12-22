@@ -4,14 +4,18 @@ namespace App\Http\Controllers\Api;
 
 use App\DTOs\CitationRequestDTO;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\CitationAnalyzeRequest;
 use App\Interfaces\CitationRepositoryInterface;
 use App\Models\CitationTask;
 use App\Services\ApiResponseModifier;
 use App\Services\CitationService;
+use App\Traits\HasApiResponse;
 use Illuminate\Http\Request;
 
 class CitationController extends Controller
 {
+    use HasApiResponse;
+
     public function __construct(
         protected CitationService $citationService,
         protected CitationRepositoryInterface $citationRepository,
@@ -19,14 +23,11 @@ class CitationController extends Controller
     ) {
     }
 
-    public function analyze(Request $request)
+    public function analyze(CitationAnalyzeRequest $request)
     {
-        $validated = $request->validate([
-            'url' => ['required', 'url'],
-            'num_queries' => ['nullable', 'integer', 'min:10', 'max:' . config('citations.max_queries', 150)],
-        ]);
+        $validated = $request->validated();
 
-        $dto = CitationRequestDTO::fromArray($validated, config('citations.default_queries', 10));
+        $dto = CitationRequestDTO::fromArray($validated, config('citations.default_queries', 1000));
         $task = $this->citationService->createTask($dto);
 
         return $this->responseModifier
@@ -75,13 +76,13 @@ class CitationController extends Controller
 
         $results = $task->results ?? [];
         $byQuery = $results['by_query'] ?? [];
-        
+
         $cleanedByQuery = [];
         foreach ($byQuery as $index => $entry) {
             $cleaned = [
                 'query' => $entry['query'] ?? '',
             ];
-            
+
             foreach (['gpt', 'gemini'] as $provider) {
                 if (isset($entry[$provider])) {
                     $cleaned[$provider] = [
@@ -91,10 +92,14 @@ class CitationController extends Controller
                     ];
                 }
             }
-            
+
+            if (isset($entry['top_competitors'])) {
+                $cleaned['top_competitors'] = $entry['top_competitors'];
+            }
+
             $cleanedByQuery[$index] = $cleaned;
         }
-        
+
         $scores = [
             'gpt_score' => $task->meta['gpt_score'] ?? null,
             'gemini_score' => $task->meta['gemini_score'] ?? null,
@@ -155,4 +160,3 @@ class CitationController extends Controller
             ->response();
     }
 }
-

@@ -29,7 +29,6 @@ class CitationRepository implements CitationRepositoryInterface
     public function appendResults(CitationTask $task, array $payload): CitationTask
     {
         return DB::transaction(function () use ($task, $payload) {
-            /** @var CitationTask $locked */
             $locked = CitationTask::lockForUpdate()->findOrFail($task->id);
             $results = $locked->results ?? [];
 
@@ -81,7 +80,6 @@ class CitationRepository implements CitationRepositoryInterface
     public function updateCompetitorsAndMeta(CitationTask $task, array $competitors, array $meta): CitationTask
     {
         return DB::transaction(function () use ($task, $competitors, $meta) {
-            /** @var CitationTask $locked */
             $locked = CitationTask::lockForUpdate()->findOrFail($task->id);
             $locked->competitors = $competitors;
             $mergedMeta = $locked->meta ?? [];
@@ -99,7 +97,7 @@ class CitationRepository implements CitationRepositoryInterface
     public function findCompletedByUrl(string $url, ?int $cacheDays = null): ?CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($url);
-        
+
         $query = CitationTask::where('url', $normalizedUrl)
             ->where('status', CitationTask::STATUS_COMPLETED)
             ->orderBy('created_at', 'desc');
@@ -114,7 +112,7 @@ class CitationRepository implements CitationRepositoryInterface
     protected function normalizeUrl(string $url): string
     {
         $url = trim($url);
-        
+
         if (!preg_match('/^https?:\/\//', $url)) {
             $url = 'https://' . $url;
         }
@@ -142,4 +140,3 @@ class CitationRepository implements CitationRepositoryInterface
         return $normalized;
     }
 }
-

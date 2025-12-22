@@ -9,6 +9,7 @@ class CitationQueryResultDTO
         public readonly string $query,
         public readonly ?array $gpt,
         public readonly ?array $gemini,
+        public readonly array $topCompetitors = [],
     ) {
     }
 
@@ -18,7 +19,7 @@ class CitationQueryResultDTO
             'query' => $this->query,
             'gpt' => $this->gpt,
             'gemini' => $this->gemini,
+            'top_competitors' => $this->topCompetitors,
         ];
     }
 }
-

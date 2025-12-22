@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Keyword extends Model
 {
+    use HasFactory;
     protected $fillable = [
         'keyword_research_job_id',
         'keyword_cluster_id',

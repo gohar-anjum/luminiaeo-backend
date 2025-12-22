@@ -16,7 +16,7 @@ class ProcessKeywordIntentJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $tries = 2;
-    public $timeout = 300; // 5 minutes
+    public $timeout = 300;
 
     public function __construct(
         public int $keywordId
@@ -32,7 +32,6 @@ class ProcessKeywordIntentJob implements ShouldQueue
             return;
         }
 
-        // Skip if already analyzed
         if ($keyword->intent_category && $keyword->ai_visibility_score !== null) {
             return;
         }
@@ -67,4 +66,3 @@ class ProcessKeywordIntentJob implements ShouldQueue
         }
     }
 }
-

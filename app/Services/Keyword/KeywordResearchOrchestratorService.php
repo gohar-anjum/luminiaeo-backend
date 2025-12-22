@@ -11,6 +11,9 @@ use App\Services\Google\KeywordPlannerService;
 use App\Services\Keyword\AnswerThePublicService;
 use App\Services\Keyword\KeywordScraperService;
 use App\Services\Keyword\SemanticClusteringService;
+use App\Services\Keyword\KeywordCacheService;
+use App\Services\Keyword\KeywordClusteringCacheService;
+use App\Services\Keyword\CombinedKeywordService;
 use App\Services\LLM\LLMClient;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -22,6 +25,9 @@ class KeywordResearchOrchestratorService
         protected KeywordScraperService $scraperService,
         protected AnswerThePublicService $atpService,
         protected SemanticClusteringService $clusteringService,
+        protected KeywordCacheService $cacheService,
+        protected KeywordClusteringCacheService $clusteringCacheService,
+        protected CombinedKeywordService $combinedKeywordService,
         protected LLMClient $llmClient
     ) {
     }
@@ -50,7 +56,11 @@ class KeywordResearchOrchestratorService
         $this->updateProgress($job, 'clustering', 50);
 
         if ($settings['enable_clustering'] ?? true) {
-            $this->clusterKeywords($job, $allKeywords);
+            $numClusters = min(10, max(3, (int) (count($allKeywords) / 20)));
+
+            $clusteringResult = $this->clusteringService->clusterKeywords($allKeywords, $numClusters, true);
+
+            $this->storeClusters($job, $clusteringResult);
         }
 
         $this->updateProgress($job, 'intent_scoring', 70);
@@ -86,7 +96,7 @@ class KeywordResearchOrchestratorService
                     $settings['max_keywords'] ?? null
                 );
                 $allKeywords = array_merge($allKeywords, $plannerKeywords);
-                
+
                 Log::info('Google Keyword Planner completed', [
                     'job_id' => $job->id,
                     'keywords_found' => count($plannerKeywords),
@@ -103,7 +113,7 @@ class KeywordResearchOrchestratorService
             try {
                 $scraperKeywords = $this->scraperService->scrapeAll($seedKeyword, $languageCode);
                 $allKeywords = array_merge($allKeywords, $scraperKeywords);
-                
+
                 Log::info('Keyword scraper completed', [
                     'job_id' => $job->id,
                     'keywords_found' => count($scraperKeywords),
@@ -116,11 +126,33 @@ class KeywordResearchOrchestratorService
             }
         }
 
+        if ($settings['enable_combined_keywords'] ?? true) {
+            try {
+                $combinedKeywords = $this->combinedKeywordService->getCombinedKeywords(
+                    $seedKeyword,
+                    (int) $geoTargetId,
+                    $languageCode,
+                    $settings['max_keywords'] ? (int) ($settings['max_keywords'] * 0.4) : null
+                );
+                $allKeywords = array_merge($allKeywords, $combinedKeywords);
+
+                Log::info('Combined keywords (DataForSEO + AlsoAsked) completed', [
+                    'job_id' => $job->id,
+                    'keywords_found' => count($combinedKeywords),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('Combined keywords failed', [
+                    'job_id' => $job->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         if ($settings['enable_answerthepublic'] ?? true) {
             try {
                 $atpKeywords = $this->atpService->getKeywordData($seedKeyword, $languageCode);
                 $allKeywords = array_merge($allKeywords, $atpKeywords);
-                
+
                 Log::info('AnswerThePublic completed', [
                     'job_id' => $job->id,
                     'keywords_found' => count($atpKeywords),
@@ -141,43 +173,56 @@ class KeywordResearchOrchestratorService
         $keywordIds = [];
 
         DB::transaction(function () use ($job, $keywords, &$keywordIds) {
-            foreach ($keywords as $keywordDTO) {
-                $keyword = Keyword::create([
-                    'keyword_research_job_id' => $job->id,
-                    'keyword' => $keywordDTO->keyword,
-                    'source' => $keywordDTO->source,
-                    'search_volume' => $keywordDTO->searchVolume,
-                    'competition' => $keywordDTO->competition,
-                    'cpc' => $keywordDTO->cpc,
-                    'intent' => $keywordDTO->intent,
-                    'intent_category' => $keywordDTO->intentCategory,
-                    'intent_metadata' => $keywordDTO->intentMetadata,
-                    'question_variations' => $keywordDTO->questionVariations,
-                    'long_tail_versions' => $keywordDTO->longTailVersions,
-                    'ai_visibility_score' => $keywordDTO->aiVisibilityScore,
-                    'semantic_data' => $keywordDTO->semanticData,
-                    'location' => null,
-                    'language_code' => $job->language_code ?? 'en',
-                    'geoTargetId' => $job->geoTargetId ?? 2840,
-                ]);
+            $batchSize = 500;
+            $batches = array_chunk($keywords, $batchSize);
 
-                $keywordIds[] = $keyword->id;
+            foreach ($batches as $batch) {
+                $insertData = [];
+                $now = now();
+
+                foreach ($batch as $keywordDTO) {
+                    $insertData[] = [
+                        'keyword_research_job_id' => $job->id,
+                        'keyword' => $keywordDTO->keyword,
+                        'source' => $keywordDTO->source,
+                        'search_volume' => $keywordDTO->searchVolume,
+                        'competition' => $keywordDTO->competition,
+                        'cpc' => $keywordDTO->cpc,
+                        'intent' => $keywordDTO->intent,
+                        'intent_category' => $keywordDTO->intentCategory,
+                        'intent_metadata' => json_encode($keywordDTO->intentMetadata),
+                        'question_variations' => json_encode($keywordDTO->questionVariations),
+                        'long_tail_versions' => json_encode($keywordDTO->longTailVersions),
+                        'ai_visibility_score' => $keywordDTO->aiVisibilityScore,
+                        'semantic_data' => json_encode($keywordDTO->semanticData),
+                        'location' => null,
+                        'language_code' => $job->language_code ?? 'en',
+                        'geoTargetId' => $job->geoTargetId ?? 2840,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }
+
+                Keyword::insert($insertData);
+
+                $insertedKeywords = Keyword::where('keyword_research_job_id', $job->id)
+                    ->whereIn('keyword', array_map(fn($dto) => $dto->keyword, $batch))
+                    ->pluck('id')
+                    ->toArray();
+
+                $keywordIds = array_merge($keywordIds, $insertedKeywords);
             }
         });
 
         return $keywordIds;
     }
 
-    protected function clusterKeywords(KeywordResearchJob $job, array $keywords): void
+    protected function storeClusters(KeywordResearchJob $job, array $clusteringResult): void
     {
-        $numClusters = min(10, max(3, (int) (count($keywords) / 20)));
-        
-        $result = $this->clusteringService->clusterKeywords($keywords, $numClusters);
-        
-        DB::transaction(function () use ($job, $result) {
+        DB::transaction(function () use ($job, $clusteringResult) {
             $clusterModels = [];
-            
-            foreach ($result['clusters'] as $index => $clusterDTO) {
+
+            foreach ($clusteringResult['clusters'] as $index => $clusterDTO) {
                 $cluster = KeywordCluster::create([
                     'keyword_research_job_id' => $job->id,
                     'topic_name' => $clusterDTO->topicName,
@@ -188,11 +233,11 @@ class KeywordResearchOrchestratorService
                     'ai_visibility_projection' => $clusterDTO->aiVisibilityProjection,
                     'keyword_count' => $clusterDTO->keywordCount,
                 ]);
-                
+
                 $clusterModels[$index] = $cluster;
             }
 
-            foreach ($result['keyword_cluster_map'] as $keywordText => $clusterIndex) {
+            foreach ($clusteringResult['keyword_cluster_map'] as $keywordText => $clusterIndex) {
                 if (isset($clusterModels[$clusterIndex])) {
                     Keyword::where('keyword_research_job_id', $job->id)
                         ->where('keyword', $keywordText)
@@ -211,8 +256,18 @@ class KeywordResearchOrchestratorService
 
     protected function generateResult(KeywordResearchJob $job): array
     {
-        $keywords = $job->keywords()->with('cluster')->get();
-        $clusters = $job->clusters()->withCount('keywords')->get();
+
+        $keywords = $job->keywords()
+            ->with('cluster:id,topic_name,description')
+            ->select([
+                'id', 'keyword', 'source', 'search_volume', 'competition', 'cpc',
+                'intent_category', 'ai_visibility_score', 'keyword_cluster_id', 'question_variations'
+            ])
+            ->get();
+
+        $clusters = $job->clusters()
+            ->withCount('keywords')
+            ->get();
 
         return [
             'summary' => [
@@ -294,4 +349,3 @@ class KeywordResearchOrchestratorService
         $job->update(['progress' => $progress]);
     }
 }
-

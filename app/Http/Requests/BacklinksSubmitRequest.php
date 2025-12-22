@@ -42,7 +42,7 @@ class BacklinksSubmitRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        // Normalize domain URL
+
         if ($this->has('domain')) {
             $domain = $this->input('domain');
             if (!str_starts_with($domain, 'http://') && !str_starts_with($domain, 'https://')) {
@@ -51,4 +51,3 @@ class BacklinksSubmitRequest extends FormRequest
         }
     }
 }
-
