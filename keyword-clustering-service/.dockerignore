@@ -1,0 +1,39 @@
+# Ignore virtual environments
+venv/
+env/
+.venv/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Ignore model files (will be mounted as volume)
+models/
+*.pth
+*.pt
+*.h5
+*.joblib
+
+# Ignore training data (will be mounted as volume)
+training_pairs*.json
+*.ipynb
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore git
+.git/
+.gitignore
+
+
+
