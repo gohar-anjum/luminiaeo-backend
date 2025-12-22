@@ -23,7 +23,7 @@ class CitationServiceTest extends TestCase
 
         $service = new CitationService($repository, $llm);
 
-        $queries = $service->generateQueries('https://example.com', 150);
+        $queries = $service->generateQueries('https:
 
         $this->assertCount(150, $queries);
         $this->assertEquals(150, count(array_unique($queries)));
@@ -38,4 +38,3 @@ class CitationServiceTest extends TestCase
         return array_map(fn ($i) => "llm suggestion {$i}", range(1, $count));
     }
 }
-

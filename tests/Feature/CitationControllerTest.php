@@ -29,7 +29,7 @@ class CitationControllerTest extends TestCase
         $user = User::factory()->create();
 
         $response = $this->actingAs($user, 'sanctum')->postJson('/api/citations/analyze', [
-            'url' => 'https://example.com',
+            'url' => 'https:
         ]);
 
         $response->assertStatus(202)->assertJsonStructure(['task_id', 'status', 'message']);
@@ -46,4 +46,3 @@ class CitationControllerTest extends TestCase
         return array_map(fn ($i) => "query {$i}", range(1, $count));
     }
 }
-

@@ -27,7 +27,7 @@ class SafeBrowsingServiceTest extends TestCase
                     'threatType' => 'MALWARE',
                     'platformType' => 'ANY_PLATFORM',
                     'threatEntryType' => 'URL',
-                    'threat' => ['url' => 'https://bad.example'],
+                    'threat' => ['url' => 'https:
                 ],
             ],
         ];
@@ -39,4 +39,3 @@ class SafeBrowsingServiceTest extends TestCase
         $this->assertSame('MALWARE', $signals['threats'][0]['threatType']);
     }
 }
-
