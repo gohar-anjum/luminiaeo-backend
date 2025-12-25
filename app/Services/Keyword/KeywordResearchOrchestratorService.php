@@ -8,6 +8,7 @@ use App\Models\Keyword;
 use App\Models\KeywordCluster;
 use App\Models\KeywordResearchJob;
 use App\Services\Google\KeywordPlannerService;
+use App\Services\DataForSEO\DataForSEOService;
 use App\Services\Keyword\AnswerThePublicService;
 use App\Services\Keyword\KeywordScraperService;
 use App\Services\Keyword\SemanticClusteringService;
@@ -22,6 +23,7 @@ class KeywordResearchOrchestratorService
 {
     public function __construct(
         protected KeywordPlannerService $keywordPlannerService,
+        protected ?DataForSEOService $dataForSEOService,
         protected KeywordScraperService $scraperService,
         protected AnswerThePublicService $atpService,
         protected SemanticClusteringService $clusteringService,
@@ -87,7 +89,10 @@ class KeywordResearchOrchestratorService
         $languageCode = $job->language_code ?? 'en';
         $geoTargetId = (string) ($job->geoTargetId ?? 2840);
 
-        if ($settings['enable_google_planner'] ?? true) {
+        $useGooglePlanner = $settings['enable_google_planner'] ?? true;
+        $useDataForSEOPlanner = config('services.dataforseo.keyword_planner_enabled', false);
+
+        if ($useGooglePlanner && !$useDataForSEOPlanner) {
             try {
                 $plannerKeywords = $this->keywordPlannerService->getKeywordIdeas(
                     $seedKeyword,
@@ -103,6 +108,33 @@ class KeywordResearchOrchestratorService
                 ]);
             } catch (\Throwable $e) {
                 Log::error('Google Keyword Planner failed', [
+                    'job_id' => $job->id,
+                    'error' => $e->getMessage(),
+                ]);
+                
+                if ($useDataForSEOPlanner && $this->dataForSEOService) {
+                    Log::info('Falling back to DataForSEO Keyword Planner', ['job_id' => $job->id]);
+                    $useGooglePlanner = false;
+                }
+            }
+        }
+
+        if (($useDataForSEOPlanner || !$useGooglePlanner) && $this->dataForSEOService) {
+            try {
+                $plannerKeywords = $this->dataForSEOService->getKeywordIdeas(
+                    $seedKeyword,
+                    $languageCode,
+                    (int) $geoTargetId,
+                    $settings['max_keywords'] ?? null
+                );
+                $allKeywords = array_merge($allKeywords, $plannerKeywords);
+
+                Log::info('DataForSEO Keyword Planner completed', [
+                    'job_id' => $job->id,
+                    'keywords_found' => count($plannerKeywords),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('DataForSEO Keyword Planner failed', [
                     'job_id' => $job->id,
                     'error' => $e->getMessage(),
                 ]);

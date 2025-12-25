@@ -9,6 +9,7 @@ use App\Models\KeywordResearchJob as KeywordResearchJobModel;
 use App\Services\Keyword\KeywordResearchOrchestratorService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class KeywordService
 {
@@ -28,28 +29,57 @@ class KeywordService
 
     public function createKeywordResearch(KeywordResearchRequestDTO $dto): KeywordResearchJobModel
     {
-        $job = KeywordResearchJobModel::create([
+        // Get available columns from database
+        $columns = [];
+        try {
+            $columns = Schema::getColumnListing('keyword_research_jobs');
+        } catch (\Exception $e) {
+            // If we can't get columns, use basic structure
+        }
+
+        // Start with only the columns that definitely exist
+        $data = [
             'user_id' => Auth::id(),
-            'project_id' => $dto->projectId,
             'query' => $dto->query,
             'status' => KeywordResearchJobModel::STATUS_PENDING,
-            'language_code' => $dto->languageCode,
-            'geoTargetId' => $dto->geoTargetId,
-            'settings' => [
-                'max_keywords' => $dto->maxKeywords,
-                'enable_google_planner' => $dto->enableGooglePlanner,
-                'enable_scraper' => $dto->enableScraper,
-                'enable_answerthepublic' => $dto->enableAnswerThePublic,
-                'enable_clustering' => $dto->enableClustering,
-                'enable_intent_scoring' => $dto->enableIntentScoring,
-            ],
-            'progress' => [
-                'queued' => [
-                    'percentage' => 0,
-                    'timestamp' => now()->toIso8601String(),
-                ],
-            ],
-        ]);
+        ];
+
+        // Only include optional columns if they exist in the database
+        if (!empty($columns)) {
+            if (in_array('project_id', $columns) && $dto->projectId !== null) {
+                $data['project_id'] = $dto->projectId;
+            }
+            
+            if (in_array('language_code', $columns) && $dto->languageCode !== null) {
+                $data['language_code'] = $dto->languageCode;
+            }
+            
+            if (in_array('geoTargetId', $columns) && $dto->geoTargetId !== null) {
+                $data['geoTargetId'] = $dto->geoTargetId;
+            }
+            
+            if (in_array('settings', $columns)) {
+                $data['settings'] = [
+                    'max_keywords' => $dto->maxKeywords,
+                    'enable_google_planner' => $dto->enableGooglePlanner,
+                    'enable_scraper' => $dto->enableScraper,
+                    'enable_answerthepublic' => $dto->enableAnswerThePublic,
+                    'enable_clustering' => $dto->enableClustering,
+                    'enable_intent_scoring' => $dto->enableIntentScoring,
+                ];
+            }
+            
+            if (in_array('progress', $columns)) {
+                $data['progress'] = [
+                    'queued' => [
+                        'percentage' => 0,
+                        'timestamp' => now()->toIso8601String(),
+                    ],
+                ];
+            }
+        }
+
+        $job = KeywordResearchJobModel::create($data);
 
         ProcessKeywordResearchJob::dispatch($job->id);
 
@@ -64,7 +94,26 @@ class KeywordService
 
     public function getKeywordResearchStatus(int $jobId)
     {
-        $job = KeywordResearchJobModel::with(['keywords', 'clusters'])->findOrFail($jobId);
+        // Check if relationship columns exist before eager loading
+        $withRelations = [];
+        try {
+            $keywordColumns = Schema::getColumnListing('keywords');
+            $clusterColumns = Schema::getColumnListing('keyword_clusters');
+            
+            if (in_array('keyword_research_job_id', $keywordColumns)) {
+                $withRelations[] = 'keywords';
+            }
+            
+            if (in_array('keyword_research_job_id', $clusterColumns)) {
+                $withRelations[] = 'clusters';
+            }
+        } catch (\Exception $e) {
+            // If we can't check, don't load relationships
+        }
+        
+        $job = !empty($withRelations) 
+            ? KeywordResearchJobModel::with($withRelations)->findOrFail($jobId)
+            : KeywordResearchJobModel::findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();
@@ -85,7 +134,31 @@ class KeywordService
 
     public function getKeywordResearchResults(int $jobId)
     {
-        $job = KeywordResearchJobModel::with(['keywords.cluster', 'clusters'])->findOrFail($jobId);
+        // Check if relationship columns exist before eager loading
+        $withRelations = [];
+        try {
+            $keywordColumns = Schema::getColumnListing('keywords');
+            $clusterColumns = Schema::getColumnListing('keyword_clusters');
+            
+            if (in_array('keyword_research_job_id', $keywordColumns)) {
+                // Check if keywords table has cluster relationship
+                if (in_array('keyword_cluster_id', $keywordColumns)) {
+                    $withRelations[] = 'keywords.cluster';
+                } else {
+                    $withRelations[] = 'keywords';
+                }
+            }
+            
+            if (in_array('keyword_research_job_id', $clusterColumns)) {
+                $withRelations[] = 'clusters';
+            }
+        } catch (\Exception $e) {
+            // If we can't check, don't load relationships
+        }
+        
+        $job = !empty($withRelations) 
+            ? KeywordResearchJobModel::with($withRelations)->findOrFail($jobId)
+            : KeywordResearchJobModel::findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();

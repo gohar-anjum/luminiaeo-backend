@@ -13,7 +13,6 @@ use App\Services\Serp\SerpService;
 use App\Services\FAQ\AlsoAskedService;
 use App\Exceptions\SerpException;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Auth;
 
@@ -98,16 +97,47 @@ class FaqGeneratorService
         $allQuestions = $this->combineQuestions($serpQuestions, $alsoAskedQuestions);
 
         if (empty($allQuestions)) {
-            Log::warning('No questions found from SERP or AlsoAsked', [
-                'url' => $url,
-                'topic' => $topic,
-            ]);
             throw new \RuntimeException(
                 'No questions found from SERP or AlsoAsked. Please ensure at least one of these services is configured and returns questions.'
             );
         }
 
-        $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options);
+        // Try Gemini first, then GPT, then SERP fallback
+        $faqs = null;
+        $lastException = null;
+
+        // Try Gemini
+        try {
+            $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options);
+        } catch (\Exception $geminiException) {
+            $lastException = $geminiException;
+
+            // Try GPT fallback
+            try {
+                $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
+            } catch (\Exception $gptException) {
+                $lastException = $gptException;
+
+                // Final fallback to SERP response
+                $serpResponse = $this->fetchSerpResponse($url, $topic);
+
+                if ($serpResponse && !empty($serpResponse)) {
+                    $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+
+                    if (empty($faqs)) {
+                        throw new \RuntimeException('Failed to generate FAQs from SERP response: No FAQs extracted');
+                    }
+                } else {
+                    // If all fallbacks fail, throw the last exception
+                    throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                }
+            }
+        }
+
+        if (empty($faqs)) {
+            throw new \RuntimeException('Failed to generate FAQs: No FAQs generated from any source');
+        }
+
         $faqRecord = $this->storeFaqsInDatabase($url, $topic, $faqs, $options, $sourceHash);
         Cache::put($cacheKey, $faqs, now()->addSeconds($this->cacheTTL));
 
@@ -122,7 +152,7 @@ class FaqGeneratorService
         );
     }
 
-    protected function fetchUrlContent(string $url): ?string
+    public function fetchUrlContent(string $url): ?string
     {
         try {
             $response = Http::timeout($this->timeout)
@@ -157,32 +187,17 @@ class FaqGeneratorService
     protected function fetchSerpQuestions(?string $url, ?string $topic): array
     {
         try {
-            Log::info('Starting SERP questions fetch', [
-                'url' => $url,
-                'topic' => $topic,
-            ]);
-
             if (!$this->isSerpServiceAvailable()) {
-                Log::info('SERP service not available, skipping');
                 return [];
             }
 
             $searchQuery = $this->buildSearchQuery($url, $topic);
 
-            Log::info('SERP search query built', [
-                'search_query' => $searchQuery,
-            ]);
-
             if (empty($searchQuery)) {
-                Log::info('SERP search query is empty, skipping');
                 return [];
             }
 
             $serpService = $this->getSerpService();
-
-            Log::info('Calling SERP API', [
-                'search_query' => $searchQuery,
-            ]);
 
             $serpResults = $serpService->getSerpResults(
                 $searchQuery,
@@ -190,32 +205,12 @@ class FaqGeneratorService
                 2840
             );
 
-            Log::info('SERP API call completed', [
-                'results_type' => gettype($serpResults),
-                'results_keys' => is_array($serpResults) ? array_keys($serpResults) : [],
-            ]);
-
             $questions = $this->extractPeopleAlsoAskQuestions($serpResults);
-
-            Log::info('SERP questions extracted', [
-                'questions_count' => count($questions),
-                'questions' => $questions,
-            ]);
 
             return $questions;
         } catch (SerpException $e) {
-            Log::warning('SERP API error while fetching questions', [
-                'error' => $e->getMessage(),
-                'url' => $url,
-                'topic' => $topic,
-            ]);
             return [];
         } catch (\Exception $e) {
-            Log::warning('Error fetching SERP questions', [
-                'error' => $e->getMessage(),
-                'url' => $url,
-                'topic' => $topic,
-            ]);
             return [];
         }
     }
@@ -304,31 +299,142 @@ class FaqGeneratorService
         return array_slice(array_unique($questions), 0, 20);
     }
 
+    /**
+     * Generate FAQs from SERP response by extracting questions and answers from related_questions
+     * This is used as a fallback when Gemini API fails
+     */
+    public function generateFaqsFromSerpResponse(?string $url, ?string $topic, array $serpResponse): array
+    {
+        $faqs = [];
+
+        // Extract from related_questions (has question and snippet fields)
+        if (isset($serpResponse['related_questions']) && is_array($serpResponse['related_questions'])) {
+            foreach ($serpResponse['related_questions'] as $item) {
+                if (isset($item['question']) && !empty(trim($item['question']))) {
+                    $question = trim($item['question']);
+                    $answer = '';
+
+                    // Get answer from snippet if available
+                    if (isset($item['snippet']) && !empty(trim($item['snippet']))) {
+                        $answer = trim($item['snippet']);
+                    } elseif (isset($item['answer']) && !empty(trim($item['answer']))) {
+                        $answer = trim($item['answer']);
+                    } elseif (isset($item['text']) && !empty(trim($item['text']))) {
+                        $answer = trim($item['text']);
+                    }
+
+                    // Only add if we have both question and answer
+                    if (!empty($answer)) {
+                        $faqs[] = [
+                            'question' => $question,
+                            'answer' => $answer,
+                        ];
+                    }
+                }
+            }
+        }
+
+        // Also check knowledge_graph for AI overview answers
+        if (isset($serpResponse['knowledge_graph'])) {
+            $kg = $serpResponse['knowledge_graph'];
+            
+            // Check free section
+            if (isset($kg['free']['ai_overview']['text_blocks']) && is_array($kg['free']['ai_overview']['text_blocks'])) {
+                $question = $kg['free']['subtitle'] ?? 'Is ' . ($topic ?? 'it') . ' free?';
+                $answerParts = [];
+                
+                foreach ($kg['free']['ai_overview']['text_blocks'] as $block) {
+                    if (isset($block['snippet']) && !empty(trim($block['snippet']))) {
+                        $answerParts[] = trim($block['snippet']);
+                    }
+                }
+                
+                if (!empty($answerParts)) {
+                    $faqs[] = [
+                        'question' => $question,
+                        'answer' => implode(' ', $answerParts),
+                    ];
+                }
+            }
+            
+            // Check pricing section
+            if (isset($kg['pricing']['ai_overview']['text_blocks']) && is_array($kg['pricing']['ai_overview']['text_blocks'])) {
+                $question = $kg['pricing']['subtitle'] ?? ($topic ?? 'Product') . ' pricing';
+                $answerParts = [];
+                
+                foreach ($kg['pricing']['ai_overview']['text_blocks'] as $block) {
+                    if (isset($block['snippet']) && !empty(trim($block['snippet']))) {
+                        $answerParts[] = trim($block['snippet']);
+                    }
+                }
+                
+                if (!empty($answerParts)) {
+                    $faqs[] = [
+                        'question' => $question,
+                        'answer' => implode(' ', $answerParts),
+                    ];
+                }
+            }
+        }
+
+        // Limit to reasonable number and ensure format
+        $faqs = array_slice($faqs, 0, 20);
+        
+        // Ensure all FAQs have required structure
+        return array_map(function ($faq) {
+            return [
+                'question' => $faq['question'] ?? '',
+                'answer' => $faq['answer'] ?? '',
+            ];
+        }, $faqs);
+    }
+
+    /**
+     * Fetch full SERP response for fallback FAQ generation
+     */
+    public function fetchSerpResponse(?string $url, ?string $topic): ?array
+    {
+        try {
+            if (!$this->isSerpServiceAvailable()) {
+                return null;
+            }
+
+            $searchQuery = $this->buildSearchQuery($url, $topic);
+
+            if (empty($searchQuery)) {
+                return null;
+            }
+
+            $serpService = $this->getSerpService();
+
+            $serpResults = $serpService->getSerpResults(
+                $searchQuery,
+                'en',
+                2840
+            );
+
+            return $serpResults;
+        } catch (SerpException $e) {
+            return null;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
     protected function fetchAlsoAskedQuestions(?string $url, ?string $topic): array
     {
         try {
-            Log::info('Starting AlsoAsked questions fetch', [
-                'url' => $url,
-                'topic' => $topic,
-            ]);
-
             $alsoAskedService = $this->getAlsoAskedService();
 
             if (!$alsoAskedService->isAvailable()) {
-                Log::info('AlsoAsked service not available, skipping');
                 return [];
             }
 
             $searchQuery = $this->buildSearchQuery($url, $topic);
 
             if (empty($searchQuery)) {
-                Log::info('AlsoAsked search query is empty, skipping');
                 return [];
             }
-
-            Log::info('Calling AlsoAsked API', [
-                'search_query' => $searchQuery,
-            ]);
 
             $questions = $alsoAskedService->search(
                 $searchQuery,
@@ -338,18 +444,8 @@ class FaqGeneratorService
                 false
             );
 
-            Log::info('AlsoAsked API call completed', [
-                'questions_count' => count($questions),
-                'questions' => array_slice($questions, 0, 10),
-            ]);
-
             return $questions;
         } catch (\Exception $e) {
-            Log::warning('Error fetching AlsoAsked questions', [
-                'error' => $e->getMessage(),
-                'url' => $url,
-                'topic' => $topic,
-            ]);
             return [];
         }
     }
@@ -363,7 +459,7 @@ class FaqGeneratorService
         return $this->alsoAskedService;
     }
 
-    protected function combineQuestions(array $serpQuestions, array $alsoAskedQuestions): array
+    public function combineQuestions(array $serpQuestions, array $alsoAskedQuestions): array
     {
         $allQuestions = array_merge($serpQuestions, $alsoAskedQuestions);
 
@@ -396,13 +492,6 @@ class FaqGeneratorService
             }
         }
 
-        Log::info('Combined questions from multiple sources', [
-            'serp_questions_count' => count($serpQuestions),
-            'alsoasked_questions_count' => count($alsoAskedQuestions),
-            'total_combined' => count($allQuestions),
-            'unique_questions_count' => count($uniqueQuestions),
-        ]);
-
         return array_slice($uniqueQuestions, 0, 30);
     }
 
@@ -427,19 +516,6 @@ class FaqGeneratorService
             }
         }
 
-        Log::info('Source questions usage validation', [
-            'total_source_questions' => count($sourceQuestions),
-            'used_questions' => $usedQuestions,
-            'usage_percentage' => count($faqs) > 0 ? ($usedQuestions / count($faqs)) * 100 : 0,
-        ]);
-
-        if ($usedQuestions < 7 && count($sourceQuestions) >= 10) {
-            Log::warning('Low source questions usage', [
-                'used' => $usedQuestions,
-                'expected_minimum' => 7,
-                'total_source_questions' => count($sourceQuestions),
-            ]);
-        }
     }
 
     protected function calculateQuestionSimilarity(string $question1, string $question2): float
@@ -461,20 +537,13 @@ class FaqGeneratorService
         return count($commonWords) / $totalWords;
     }
 
-    protected function generateFaqsWithGemini(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): array
+    public function generateFaqsWithGemini(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): array
     {
         $config = config('citations.gemini');
 
         if (empty($config['api'])) {
-            Log::error('Gemini API key is not configured');
             throw new \RuntimeException('Gemini API key is not configured. Please set GOOGLE_API_KEY in your .env file.');
         }
-
-        Log::info('Generating FAQs with Gemini', [
-            'has_questions' => !empty($serpQuestions),
-            'questions_count' => count($serpQuestions),
-            'questions_sample' => array_slice($serpQuestions, 0, 5),
-        ]);
 
         $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options);
 
@@ -507,10 +576,6 @@ class FaqGeneratorService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
-                Log::error('Gemini API error for FAQ generation', [
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                ]);
                 throw new \RuntimeException('Gemini API error: ' . $response->body());
             }
 
@@ -522,14 +587,9 @@ class FaqGeneratorService
                 $this->validateQuestionsUsage($faqs, $serpQuestions);
             }
 
-            return $this->validateAndFormatFaqs($faqs);
+            return $this->validateAndFormatFaqs($faqs, count($serpQuestions));
 
         } catch (\Exception $e) {
-            Log::error('Error generating FAQs with Gemini', [
-                'error' => $e->getMessage(),
-                'url' => $url,
-                'topic' => $topic,
-            ]);
             throw new \RuntimeException('Failed to generate FAQs: ' . $e->getMessage());
         }
     }
@@ -592,6 +652,70 @@ class FaqGeneratorService
         throw new \RuntimeException('Invalid Gemini API response structure');
     }
 
+    public function generateFaqsWithGPT(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): array
+    {
+        $config = config('citations.openai');
+
+        if (empty($config['api_key'])) {
+            throw new \RuntimeException('OpenAI API key is not configured. Please set OPENAI_API_KEY in your .env file.');
+        }
+
+        $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options);
+
+        $messages = [
+            [
+                'role' => 'system',
+                'content' => 'You are an expert at creating comprehensive FAQ content. Always respond with valid JSON array format.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $prompt,
+            ],
+        ];
+
+        $payload = [
+            'model' => $config['model'] ?? 'gpt-4o',
+            'temperature' => $options['temperature'] ?? 0.9,
+            'response_format' => ['type' => 'json_object'],
+            'messages' => $messages,
+        ];
+
+        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions';
+
+        try {
+            $response = Http::withToken($config['api_key'])
+                ->timeout($config['timeout'] ?? 60)
+                ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
+                ->post($endpoint, $payload);
+
+            if ($response->failed()) {
+                throw new \RuntimeException('OpenAI API error: ' . $response->body());
+            }
+
+            $responseData = $response->json();
+            $text = $this->extractTextFromGPTResponse($responseData);
+            $faqs = $this->parseFaqResponse($text);
+
+            if (!empty($serpQuestions)) {
+                $this->validateQuestionsUsage($faqs, $serpQuestions);
+            }
+
+            return $this->validateAndFormatFaqs($faqs, count($serpQuestions));
+
+        } catch (\Exception $e) {
+            throw new \RuntimeException('Failed to generate FAQs: ' . $e->getMessage());
+        }
+    }
+
+    protected function extractTextFromGPTResponse(array $responseData): string
+    {
+        if (isset($responseData['choices'][0]['message']['content'])) {
+            return (string) $responseData['choices'][0]['message']['content'];
+        }
+
+        throw new \RuntimeException('Invalid OpenAI API response structure');
+    }
+
     protected function parseFaqResponse(string $text): array
     {
         $json = null;
@@ -636,17 +760,10 @@ class FaqGeneratorService
         }
 
         if ($lastError !== JSON_ERROR_NONE) {
-            Log::error('JSON decode error in FAQ response', [
-                'error' => json_last_error_msg(),
-                'json_preview' => mb_substr($json, 0, 500),
-            ]);
             throw new \RuntimeException('Invalid JSON in FAQ response: ' . json_last_error_msg());
         }
 
         if (!is_array($data)) {
-            Log::error('FAQ response is not an array', [
-                'type' => gettype($data),
-            ]);
             throw new \RuntimeException('FAQ response must be an array, got: ' . gettype($data));
         }
 
@@ -657,14 +774,13 @@ class FaqGeneratorService
         }
 
         if (!empty($data) && is_string($data[0])) {
-            Log::error('FAQ items are strings instead of objects');
             throw new \RuntimeException('FAQ items are strings instead of objects. JSON parsing failed.');
         }
 
         return $data;
     }
 
-    protected function validateAndFormatFaqs(array $faqs): array
+    protected function validateAndFormatFaqs(array $faqs, int $sourceQuestionsCount = 0): array
     {
         $validated = [];
         $seenQuestions = [];
@@ -699,14 +815,26 @@ class FaqGeneratorService
             }
         }
 
-        if (count($validated) < 5) {
-            Log::warning('Gemini returned fewer than 5 FAQs', [
-                'validated_count' => count($validated),
-                'total_received' => count($faqs),
-            ]);
+        // Calculate minimum required FAQs dynamically:
+        // - At least 3 FAQs (minimum quality threshold)
+        // - If we have fewer source questions, accept that many (but still minimum 3)
+        // - If we have 5+ source questions, require at least 5 FAQs
+        $minRequired = 3;
+        if ($sourceQuestionsCount > 0) {
+            // If we have fewer than 5 source questions, accept that many (but still minimum 3)
+            if ($sourceQuestionsCount < 5) {
+                $minRequired = max(3, $sourceQuestionsCount);
+            } else {
+                // If we have 5+ source questions, require at least 5 FAQs
+                $minRequired = 5;
+            }
+        }
+
+        if (count($validated) < $minRequired) {
             throw new \RuntimeException(
                 sprintf(
-                    'Expected at least 5 FAQs but received only %d (out of %d received). Please ensure questions are provided from SERP or AlsoAsked.',
+                    'Expected at least %d FAQs but received only %d (out of %d received). Please ensure questions are provided from SERP or AlsoAsked.',
+                    $minRequired,
                     count($validated),
                     count($faqs)
                 )
@@ -735,8 +863,17 @@ class FaqGeneratorService
         return md5(json_encode($hashInput));
     }
 
-    protected function storeFaqsInDatabase(?string $url, ?string $topic, array $faqs, array $options, string $sourceHash): \App\Models\Faq
+    public function storeFaqsInDatabase(?string $url, ?string $topic, array $faqs, array $options, string $sourceHash): \App\Models\Faq
     {
+        // Check if FAQ with same source_hash already exists
+        $existingFaq = $this->faqRepository->findByHash($sourceHash);
+        if ($existingFaq) {
+            // Increment API calls saved since we're reusing this FAQ
+            $this->faqRepository->incrementApiCallsSaved($existingFaq->id);
+            $existingFaq->refresh();
+            return $existingFaq;
+        }
+
         try {
             $faqRecord = $this->faqRepository->create([
                 'user_id' => Auth::id(),
@@ -749,12 +886,33 @@ class FaqGeneratorService
             ]);
 
             return $faqRecord;
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Handle duplicate entry error specifically
+            if ($e->getCode() === '23000' || str_contains($e->getMessage(), 'Duplicate entry')) {
+                // Retry finding the existing FAQ with a small delay to handle race conditions
+                $existingFaq = null;
+                for ($i = 0; $i < 3; $i++) {
+                    $existingFaq = $this->faqRepository->findByHash($sourceHash);
+                    if ($existingFaq) {
+                        break;
+                    }
+                    // Small delay to allow for database replication/transaction commit
+                    usleep(100000); // 0.1 second
+                }
+                
+                if ($existingFaq) {
+                    $this->faqRepository->incrementApiCallsSaved($existingFaq->id);
+                    $existingFaq->refresh();
+                    return $existingFaq;
+                }
+                
+                // If we still can't find it, throw
+                throw new \RuntimeException('Duplicate entry detected but existing FAQ not found. This may indicate a database consistency issue.');
+            }
+            
+            throw new \RuntimeException('Failed to store FAQs in database: ' . $e->getMessage());
         } catch (\Exception $e) {
-            Log::error('Failed to store FAQs in database', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return new \App\Models\Faq();
+            throw new \RuntimeException('Failed to store FAQs in database: ' . $e->getMessage());
         }
     }
 
@@ -805,5 +963,74 @@ class FaqGeneratorService
         $topic = $isUrl ? null : $input;
 
         return $this->generateSourceHash($url, $topic, $options);
+    }
+
+    /**
+     * Check if FAQ exists in database by source hash
+     */
+    public function findExistingFaq(string $input, array $options = []): ?\App\Models\Faq
+    {
+        $sourceHash = $this->getSourceHash($input, $options);
+        return $this->faqRepository->findByHash($sourceHash);
+    }
+
+    /**
+     * Increment API calls saved for an existing FAQ
+     */
+    public function incrementApiCallsSaved(int $faqId): void
+    {
+        $this->faqRepository->incrementApiCallsSaved($faqId);
+    }
+
+    public function createFaqTask(string $input, array $options = []): \App\Models\FaqTask
+    {
+        if (empty($input)) {
+            throw new \InvalidArgumentException('Input field is required (URL or topic)');
+        }
+
+        $isUrl = $this->isUrl($input);
+        $url = $isUrl ? $this->normalizeUrl($input) : null;
+        $topic = $isUrl ? null : $input;
+
+        $serpQuestions = $this->fetchSerpQuestions($url, $topic);
+        
+        if (empty($serpQuestions)) {
+            throw new \RuntimeException('No questions found from SERP. Please ensure SERP service is configured.');
+        }
+
+        $alsoAskedService = $this->getAlsoAskedService();
+        $alsoAskedSearchId = null;
+
+        if ($alsoAskedService->isAvailable()) {
+            $searchQuery = $this->buildSearchQuery($url, $topic);
+            
+            if (!empty($searchQuery)) {
+                $termsArray = [$searchQuery];
+                $alsoAskedSearchId = $alsoAskedService->createAsyncSearchJob(
+                    $termsArray,
+                    'en',
+                    'us',
+                    2
+                );
+            }
+        }
+
+        $task = \App\Models\FaqTask::create([
+            'user_id' => Auth::id(),
+            'url' => $url,
+            'topic' => $topic,
+            'serp_questions' => $serpQuestions,
+            'alsoasked_search_id' => $alsoAskedSearchId,
+            'options' => $options,
+            'status' => $alsoAskedSearchId ? 'pending' : 'processing',
+        ]);
+
+        if ($alsoAskedSearchId) {
+            \App\Jobs\ProcessFaqTask::dispatch($task->id)->delay(now()->addSeconds(2));
+        } else {
+            \App\Jobs\ProcessFaqTask::dispatch($task->id);
+        }
+
+        return $task;
     }
 }
