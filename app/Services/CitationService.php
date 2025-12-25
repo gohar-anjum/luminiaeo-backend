@@ -8,14 +8,23 @@ use App\Jobs\CitationChunkJob;
 use App\Jobs\ProcessCitationTaskJob;
 use App\Models\CitationTask;
 use App\Services\LLM\LLMClient;
+use App\Services\DataForSEO\CitationService as DataForSEOCitationService;
 use Illuminate\Support\Facades\Log;
 
 class CitationService
 {
     public function __construct(
         protected CitationRepositoryInterface $repository,
-        protected LLMClient $llmClient
+        protected LLMClient $llmClient,
+        protected ?DataForSEOCitationService $dataForSEOCitationService = null
     ) {
+        if (config('citations.dataforseo.enabled', false)) {
+            try {
+                $this->dataForSEOCitationService = app(DataForSEOCitationService::class);
+            } catch (\Exception $e) {
+                Log::warning('DataForSEO Citation Service not available', ['error' => $e->getMessage()]);
+            }
+        }
     }
 
     public function createTask(CitationRequestDTO $dto): CitationTask
@@ -168,15 +177,22 @@ class CitationService
         $stats = $this->calculateScores($results);
         $competitors = $this->computeCompetitors($results, $task->url);
 
+        $meta = [
+            'gpt_score' => $stats['gpt_score'],
+            'gemini_score' => $stats['gemini_score'],
+            'status' => CitationTask::STATUS_COMPLETED,
+            'completed_at' => now()->toIso8601String(),
+        ];
+
+        // Add DataForSEO score if available
+        if (isset($stats['dataforseo_score'])) {
+            $meta['dataforseo_score'] = $stats['dataforseo_score'];
+        }
+
         return $this->repository->updateCompetitorsAndMeta(
             $task,
             $competitors,
-            [
-                'gpt_score' => $stats['gpt_score'],
-                'gemini_score' => $stats['gemini_score'],
-                'status' => CitationTask::STATUS_COMPLETED,
-                'completed_at' => now()->toIso8601String(),
-            ]
+            $meta
         );
     }
 
@@ -221,9 +237,16 @@ class CitationService
             $queryCompetitors = $entry['top_competitors'] ?? [];
             $queryHasCitation = false;
 
+            // Check for citations from any provider (gpt, gemini, or dataforseo)
             foreach (['gpt', 'gemini'] as $provider) {
                 if (!empty($entry[$provider]['citation_found'])) {
                     $queryHasCitation = true;
+                }
+                // Also check if gpt field contains dataforseo provider
+                if ($provider === 'gpt' && isset($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
+                    if (!empty($entry['gpt']['citation_found'])) {
+                        $queryHasCitation = true;
+                    }
                 }
             }
 
@@ -263,6 +286,10 @@ class CitationService
 
                 foreach (['gpt', 'gemini'] as $provider) {
                     $providerCompetitors = $entry[$provider]['competitors'] ?? [];
+                    // Also check if gpt contains dataforseo results
+                    if ($provider === 'gpt' && isset($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
+                        $providerCompetitors = array_merge($providerCompetitors, $entry['gpt']['competitors'] ?? []);
+                    }
                     foreach ($providerCompetitors as $providerCompetitor) {
                         $providerDomain = $this->normalizeDomainForGrouping($providerCompetitor['domain'] ?? ($providerCompetitor['url'] ?? ''));
                         if ($providerDomain && $providerDomain === $domain) {
@@ -372,6 +399,7 @@ class CitationService
         $total = max(count($results), 1);
         $gptHits = 0;
         $geminiHits = 0;
+        $dataforseoHits = 0;
 
         foreach ($results as $entry) {
             if (!empty($entry['gpt']['citation_found'])) {
@@ -380,6 +408,21 @@ class CitationService
             if (!empty($entry['gemini']['citation_found'])) {
                 $geminiHits++;
             }
+            // Check for DataForSEO results
+            if (!empty($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
+                if (!empty($entry['gpt']['citation_found'])) {
+                    $dataforseoHits++;
+                }
+            }
+        }
+
+        // If DataForSEO is enabled, use DataForSEO score
+        if (config('citations.dataforseo.enabled', false) && $dataforseoHits > 0) {
+            return [
+                'gpt_score' => round(($dataforseoHits / $total) * 100, 2),
+                'gemini_score' => 0.0,
+                'dataforseo_score' => round(($dataforseoHits / $total) * 100, 2),
+            ];
         }
 
         return [

@@ -15,13 +15,37 @@ class SearchVolumeDTO
 
     public static function fromArray(array $data): self
     {
+        // Convert competition string to float (HIGH=1.0, MEDIUM=0.5, LOW=0.0)
+        $competition = null;
+        if (isset($data['competition'])) {
+            $compStr = strtoupper((string) $data['competition']);
+            $competition = match ($compStr) {
+                'HIGH' => 1.0,
+                'MEDIUM' => 0.5,
+                'LOW' => 0.0,
+                default => null,
+            };
+        }
+
+        // Calculate CPC from low/high bids if cpc is not provided
+        $cpc = $data['cpc'] ?? null;
+        if ($cpc === null && isset($data['low_top_of_page_bid']) && isset($data['high_top_of_page_bid'])) {
+            $cpc = ($data['low_top_of_page_bid'] + $data['high_top_of_page_bid']) / 2;
+        }
+
         return new self(
             keyword: $data['keyword'] ?? '',
             searchVolume: $data['search_volume'] ?? null,
-            competition: $data['competition'] ?? null,
-            cpc: $data['cpc'] ?? null,
+            competition: $competition,
+            cpc: $cpc,
             competitionIndex: $data['competition_index'] ?? null,
-            keywordInfo: $data['keyword_info'] ?? null,
+            keywordInfo: [
+                'monthly_searches' => $data['monthly_searches'] ?? null,
+                'low_top_of_page_bid' => $data['low_top_of_page_bid'] ?? null,
+                'high_top_of_page_bid' => $data['high_top_of_page_bid'] ?? null,
+                'search_partners' => $data['search_partners'] ?? null,
+                'spell' => $data['spell'] ?? null,
+            ],
         );
     }
 

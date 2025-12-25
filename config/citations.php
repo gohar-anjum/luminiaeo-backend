@@ -33,4 +33,7 @@ return [
         'heartbeat_seconds' => (int) env('CITATION_STREAM_HEARTBEAT', 10),
     ],
     'cache_days' => (int) env('CITATION_CACHE_DAYS', 30),
+    'dataforseo' => [
+        'enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
+    ],
 ];

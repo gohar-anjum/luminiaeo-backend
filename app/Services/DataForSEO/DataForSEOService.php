@@ -131,12 +131,8 @@ class DataForSEOService
                 return [];
             }
 
-            if (!isset($task['result'][0]['items']) || !is_array($task['result'][0]['items'])) {
-                Log::warning('Invalid result structure: missing items', ['task' => $task]);
-                return [];
-            }
-
-            $items = $task['result'][0]['items'];
+            // DataForSEO API returns result as direct array of items, not nested in result[0]['items']
+            $items = $task['result'];
 
             $results = array_map(function ($item) {
                 return SearchVolumeDTO::fromArray($item);
@@ -279,12 +275,8 @@ class DataForSEOService
                 return [];
             }
 
-            if (!isset($task['result'][0]['items']) || !is_array($task['result'][0]['items'])) {
-                Log::warning('Invalid result structure: missing items', ['task' => $task]);
-                return [];
-            }
-
-            $items = $task['result'][0]['items'];
+            // DataForSEO API returns result as direct array of items, not nested in result[0]['items']
+            $items = $task['result'];
 
             $results = array_map(function ($item) {
                 return \App\DTOs\KeywordsForSiteDTO::fromArray($item);
@@ -388,6 +380,123 @@ class DataForSEOService
                     'count' => count($cacheData),
                 ]);
             }
+        }
+    }
+
+    /**
+     * Get keyword ideas using DataForSEO Google Keyword Planner API
+     * This is an alternative to Google Cloud Console Keyword Planner
+     */
+    public function getKeywordIdeas(
+        string $seedKeyword,
+        string $languageCode = 'en',
+        int $locationCode = 2840,
+        ?int $maxResults = null
+    ): array {
+        $payload = [
+            'data' => [
+                [
+                    'seed_keywords' => [$seedKeyword],
+                    'language_code' => $languageCode,
+                    'location_code' => $locationCode,
+                    'include_serp_info' => false,
+                    'sort_by' => 'search_volume',
+                    'date_from' => date('Y-m-d', strtotime('-1 month')),
+                    'date_to' => date('Y-m-d'),
+                ]
+            ]
+        ];
+
+        try {
+            $response = $this->client()
+                ->post('/keywords_data/google_ads/keywords_for_keywords/live', $payload)
+                ->throw()
+                ->json();
+
+            if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
+                throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
+            }
+
+            $task = $response['tasks'][0];
+
+            if (isset($task['status_code']) && $task['status_code'] !== 20000) {
+                throw new DataForSEOException(
+                    'DataForSEO API error: ' . ($task['status_message'] ?? 'Unknown error'),
+                    $task['status_code'] ?? 500,
+                    'API_ERROR'
+                );
+            }
+
+            if (!isset($task['result']) || !is_array($task['result']) || empty($task['result'])) {
+                return [];
+            }
+
+            // DataForSEO API returns result as direct array of items, not nested in result[0]['items']
+            $items = $task['result'];
+            $results = [];
+
+            foreach ($items as $item) {
+                if ($maxResults !== null && count($results) >= $maxResults) {
+                    break;
+                }
+
+                // Convert competition string to float (HIGH=1.0, MEDIUM=0.5, LOW=0.0)
+                $competitionValue = null;
+                if (isset($item['competition'])) {
+                    $comp = strtoupper((string) $item['competition']);
+                    $competitionValue = match ($comp) {
+                        'HIGH' => 1.0,
+                        'MEDIUM' => 0.5,
+                        'LOW' => 0.0,
+                        default => null,
+                    };
+                }
+                
+                // If competition is still null, use competition_index (0-100 scale, convert to 0-1)
+                if ($competitionValue === null && isset($item['competition_index'])) {
+                    $competitionValue = (float) $item['competition_index'] / 100.0;
+                }
+
+                // Calculate CPC from low/high bids if cpc is not provided
+                $cpc = $item['cpc'] ?? null;
+                if ($cpc === null && isset($item['low_top_of_page_bid']) && isset($item['high_top_of_page_bid'])) {
+                    $cpc = ($item['low_top_of_page_bid'] + $item['high_top_of_page_bid']) / 2;
+                }
+
+                $results[] = new \App\DTOs\KeywordDataDTO(
+                    keyword: $item['keyword'] ?? '',
+                    source: 'dataforseo_keyword_planner',
+                    searchVolume: $item['search_volume'] ?? null,
+                    competition: $competitionValue,
+                    cpc: $cpc !== null ? (float) $cpc : null,
+                );
+            }
+
+            return $results;
+        } catch (RequestException $e) {
+            Log::error('DataForSEO keyword planner API request failed', [
+                'seed_keyword' => $seedKeyword,
+                'error' => $e->getMessage(),
+            ]);
+            throw new DataForSEOException(
+                'Failed to fetch keyword ideas: ' . $e->getMessage(),
+                500,
+                'API_REQUEST_FAILED',
+                $e
+            );
+        } catch (DataForSEOException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            Log::error('Unexpected error in getKeywordIdeas', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw new DataForSEOException(
+                'An unexpected error occurred: ' . $e->getMessage(),
+                500,
+                'UNEXPECTED_ERROR',
+                $e
+            );
         }
     }
 }

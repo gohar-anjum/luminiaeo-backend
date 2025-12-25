@@ -77,5 +77,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('faq')->middleware('throttle:30,1')->group(function () {
         Route::post('/generate', [\App\Http\Controllers\Api\FaqController::class, 'generate'])
             ->name('faq.generate');
+        Route::post('/task', [\App\Http\Controllers\Api\FaqController::class, 'createTask'])
+            ->name('faq.task.create');
+        Route::get('/task/{taskId}', [\App\Http\Controllers\Api\FaqController::class, 'getTaskStatus'])
+            ->name('faq.task.status');
     });
 });

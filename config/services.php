@@ -39,6 +39,8 @@ return [
         'cache_ttl' => env('DATAFORSEO_CACHE_TTL', 86400),
         'backlinks_limit' => env('DATAFORSEO_BACKLINKS_LIMIT', 100),
         'summary_limit' => env('DATAFORSEO_SUMMARY_LIMIT', 100),
+        'citation_enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
+        'keyword_planner_enabled' => env('DATAFORSEO_KEYWORD_PLANNER_ENABLED', false),
     ],
 
     'whoisxml' => [
@@ -81,7 +83,7 @@ return [
 
     'faq' => [
         'timeout' => env('FAQ_GENERATOR_TIMEOUT', 60),
-        'cache_ttl' => env('FAQ_GENERATOR_CACHE_TTL', 86400),
+        'cache_ttl' => env('FAQ_GENERATOR_CACHE_TTL', 2592000), 
     ],
 
     'alsoasked' => [

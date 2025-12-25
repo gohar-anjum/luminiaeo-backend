@@ -6,7 +6,7 @@ use App\DTOs\CitationQueryResultDTO;
 use App\Interfaces\CitationRepositoryInterface;
 use App\Models\CitationTask;
 use App\Services\CitationService;
-use App\Services\LLM\LLMClient;
+use App\Services\DataForSEO\CitationService as DataForSEOCitationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -32,8 +32,7 @@ class CitationChunkJob implements ShouldQueue
 
     public function handle(
         CitationRepositoryInterface $repository,
-        CitationService $service,
-        LLMClient $llmClient
+        CitationService $service
     ): void {
         $task = $repository->find($this->taskId);
 
@@ -47,22 +46,53 @@ class CitationChunkJob implements ShouldQueue
             return;
         }
 
+        // DataForSEO is required - no LLM fallback
+        if (!config('citations.dataforseo.enabled', false)) {
+            throw new \RuntimeException('DataForSEO citation service is required but not enabled. Please set DATAFORSEO_CITATION_ENABLED=true in your .env file.');
+        }
+
         $results = [];
-        $gptBatch = $llmClient->batchValidateCitations($this->chunk, $task->url, 'openai');
-        $geminiBatch = $llmClient->batchValidateCitations($this->chunk, $task->url, 'gemini');
 
-        foreach ($this->chunk as $index => $query) {
-            $gpt = $gptBatch[$index] ?? $this->defaultResult('gpt', $query);
-            $gemini = $geminiBatch[$index] ?? $this->defaultResult('gemini', $query);
+        try {
+            $dataForSEOCitationService = app(DataForSEOCitationService::class);
+            $dataForSEOResults = $dataForSEOCitationService->batchFindCitations($this->chunk, $task->url);
 
-            $topCompetitors = $this->mergeCompetitors(
-                $task->url,
-                $gpt['competitors'] ?? [],
-                $gemini['competitors'] ?? []
-            );
+            foreach ($this->chunk as $index => $query) {
+                $dataForSEOResult = $dataForSEOResults[$query] ?? $this->defaultDataForSEOResult($query);
+                
+                // Format as dataforseo provider result (stored in 'gpt' field for compatibility)
+                $dataforseo = [
+                    'provider' => 'dataforseo',
+                    'citation_found' => $dataForSEOResult['citation_found'] ?? false,
+                    'confidence' => $dataForSEOResult['confidence'] ?? 0.0,
+                    'citation_references' => $dataForSEOResult['references'] ?? [],
+                    'competitors' => $dataForSEOResult['competitors'] ?? [],
+                    'explanation' => $dataForSEOResult['citation_found'] 
+                        ? 'Citation found via DataForSEO SERP analysis' 
+                        : 'No citation found via DataForSEO SERP analysis',
+                    'raw_response' => null,
+                    'query' => $query,
+                ];
+                
+                // Empty result for gemini (not used when DataForSEO is enabled)
+                $gemini = $this->defaultResult('gemini', $query);
 
-            $dto = new CitationQueryResultDTO((int) $index, $query, $gpt, $gemini, $topCompetitors);
-            $results[(string) $index] = $dto->toArray();
+                $topCompetitors = $this->mergeCompetitors(
+                    $task->url,
+                    $dataforseo['competitors'] ?? [],
+                    []
+                );
+
+                $dto = new CitationQueryResultDTO((int) $index, $query, $dataforseo, $gemini, $topCompetitors);
+                $results[(string) $index] = $dto->toArray();
+            }
+        } catch (\Exception $e) {
+            Log::error('DataForSEO citation check failed', [
+                'task_id' => $task->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw new \RuntimeException('DataForSEO citation check failed: ' . $e->getMessage());
         }
 
         $meta = [
@@ -98,6 +128,7 @@ class CitationChunkJob implements ShouldQueue
 
         foreach ($lists as $list) {
             foreach ($list as $entry) {
+                // Handle both LLM format and DataForSEO format
                 $domain = $this->normalizeDomain($entry['domain'] ?? ($entry['url'] ?? null));
                 if (!$domain || $this->isTargetDomain($domain, $targetDomain)) {
                     continue;
@@ -115,8 +146,12 @@ class CitationChunkJob implements ShouldQueue
 
                 $tallies[$key]['mentions']++;
 
-                if (!empty($entry['url'])) {
-                    $tallies[$key]['urls'][] = $entry['url'];
+                $url = $entry['url'] ?? null;
+                if (empty($url) && isset($entry['domain'])) {
+                    $url = 'https://' . $entry['domain'];
+                }
+                if (!empty($url)) {
+                    $tallies[$key]['urls'][] = $url;
                 }
             }
         }
@@ -148,6 +183,16 @@ class CitationChunkJob implements ShouldQueue
             'explanation' => 'Provider result missing',
             'raw_response' => null,
             'query' => $query,
+        ];
+    }
+
+    protected function defaultDataForSEOResult(string $query): array
+    {
+        return [
+            'citation_found' => false,
+            'confidence' => 0.0,
+            'references' => [],
+            'competitors' => [],
         ];
     }
 
