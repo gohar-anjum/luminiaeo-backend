@@ -2,6 +2,8 @@
 
 namespace App\Services\Keyword;
 
+// Answer The Public service is disabled - commented out as it's no longer needed
+/*
 use App\DTOs\KeywordDataDTO;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -175,3 +177,4 @@ class AnswerThePublicService
         return !empty($this->apiKey) && strlen($this->apiKey) > 20;
     }
 }
+*/

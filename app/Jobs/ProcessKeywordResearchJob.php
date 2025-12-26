@@ -56,17 +56,25 @@ class ProcessKeywordResearchJob implements ShouldQueue
 
             Log::info('Keyword research job completed', ['job_id' => $job->id]);
         } catch (\Throwable $e) {
+            // Only update status if not already set to failed (to avoid overwriting more specific error messages)
+            if ($job->status !== KeywordResearchJob::STATUS_FAILED) {
+                $job->update([
+                    'status' => KeywordResearchJob::STATUS_FAILED,
+                    'error_message' => $e->getMessage(),
+                    'completed_at' => now(),
+                ]);
+            }
+
             Log::error('Keyword research job failed', [
                 'job_id' => $job->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            $job->update([
-                'status' => KeywordResearchJob::STATUS_FAILED,
-                'error_message' => $e->getMessage(),
-                'completed_at' => now(),
-            ]);
+            // Don't throw for "no keywords" errors - they're already handled gracefully
+            if (str_contains($e->getMessage(), 'No keywords collected')) {
+                return;
+            }
 
             throw $e;
         }

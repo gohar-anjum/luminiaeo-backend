@@ -2,6 +2,8 @@
 
 namespace Tests\Unit;
 
+// Answer The Public service is disabled - commented out as it's no longer needed
+/*
 use App\Services\Keyword\AnswerThePublicService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -24,4 +26,5 @@ class AnswerThePublicServiceTest extends TestCase
         $this->assertIsArray($result);
     }
 }
+*/
 

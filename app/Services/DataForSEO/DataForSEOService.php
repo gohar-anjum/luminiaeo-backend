@@ -97,10 +97,19 @@ class DataForSEOService
                 'location_code' => $locationCode,
             ]);
 
-            $response = $this->client()
+            $httpResponse = $this->client()
                 ->post('/keywords_data/google_ads/search_volume/live', $payload)
-                ->throw()
-                ->json();
+                ->throw();
+
+            // Log the raw response for debugging
+            Log::info('DataForSEO Search Volume API Response', [
+                'keywords_count' => count($keywords),
+                'status_code' => $httpResponse->status(),
+                'response_keys' => array_keys($httpResponse->json() ?? []),
+                'full_response' => $httpResponse->json(),
+            ]);
+
+            $response = $httpResponse->json();
 
             if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
                 Log::error('Invalid API response structure: missing tasks', ['response' => $response]);
@@ -241,10 +250,19 @@ class DataForSEOService
                 'language_code' => $languageCode,
             ]);
 
-            $response = $this->client()
+            $httpResponse = $this->client()
                 ->post('/keywords_data/google_ads/keywords_for_site/live', $payload)
-                ->throw()
-                ->json();
+                ->throw();
+
+            // Log the raw response for debugging
+            Log::info('DataForSEO Keywords For Site API Response', [
+                'target' => $target,
+                'status_code' => $httpResponse->status(),
+                'response_keys' => array_keys($httpResponse->json() ?? []),
+                'full_response' => $httpResponse->json(),
+            ]);
+
+            $response = $httpResponse->json();
 
             if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
                 Log::error('Invalid API response structure: missing tasks', ['response' => $response]);
@@ -408,10 +426,19 @@ class DataForSEOService
         ];
 
         try {
-            $response = $this->client()
+            $httpResponse = $this->client()
                 ->post('/keywords_data/google_ads/keywords_for_keywords/live', $payload)
-                ->throw()
-                ->json();
+                ->throw();
+
+            // Log the raw response for debugging
+            Log::info('DataForSEO Keyword Ideas API Response', [
+                'seed_keyword' => $seedKeyword,
+                'status_code' => $httpResponse->status(),
+                'response_keys' => array_keys($httpResponse->json() ?? []),
+                'full_response' => $httpResponse->json(),
+            ]);
+
+            $response = $httpResponse->json();
 
             if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
                 throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');

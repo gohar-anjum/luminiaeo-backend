@@ -4,7 +4,8 @@ namespace Tests\Unit;
 
 use App\Models\KeywordResearchJob;
 use App\Services\Google\KeywordPlannerService;
-use App\Services\Keyword\AnswerThePublicService;
+// Answer The Public service is disabled - commented out as it's no longer needed
+// use App\Services\Keyword\AnswerThePublicService;
 use App\Services\Keyword\KeywordScraperService;
 use App\Services\Keyword\SemanticClusteringService;
 use App\Services\Keyword\KeywordCacheService;
@@ -36,17 +37,21 @@ class KeywordResearchOrchestratorServiceTest extends TestCase
 
         $this->mockKeywordPlanner = Mockery::mock(KeywordPlannerService::class);
         $this->mockScraper = Mockery::mock(KeywordScraperService::class);
-        $this->mockATP = Mockery::mock(AnswerThePublicService::class);
+        // Answer The Public service is disabled - commented out as it's no longer needed
+        // $this->mockATP = Mockery::mock(AnswerThePublicService::class);
+        $this->mockATP = null; // Placeholder for compatibility
         $this->mockClustering = Mockery::mock(SemanticClusteringService::class);
         $this->mockCache = Mockery::mock(KeywordCacheService::class);
         $this->mockClusteringCache = Mockery::mock(KeywordClusteringCacheService::class);
         $this->mockCombined = Mockery::mock(CombinedKeywordService::class);
         $this->mockLLM = Mockery::mock(LLMClient::class);
 
+        // Note: Answer The Public service is disabled, so mockATP is set to null
+        // The service constructor no longer accepts AnswerThePublicService parameter
         $this->service = new KeywordResearchOrchestratorService(
             $this->mockKeywordPlanner,
+            null, // DataForSEOService (optional)
             $this->mockScraper,
-            $this->mockATP,
             $this->mockClustering,
             $this->mockCache,
             $this->mockClusteringCache,
@@ -70,9 +75,10 @@ class KeywordResearchOrchestratorServiceTest extends TestCase
             ->once()
             ->andReturn([]);
 
-        $this->mockATP->shouldReceive('getKeywordData')
-            ->once()
-            ->andReturn([]);
+        // Answer The Public service is disabled - commented out as it's no longer needed
+        // $this->mockATP->shouldReceive('getKeywordData')
+        //     ->once()
+        //     ->andReturn([]);
 
         $this->mockCombined->shouldReceive('getCombinedKeywords')
             ->once()
@@ -103,9 +109,10 @@ class KeywordResearchOrchestratorServiceTest extends TestCase
             ->once()
             ->andReturn([]);
 
-        $this->mockATP->shouldReceive('getKeywordData')
-            ->once()
-            ->andReturn([]);
+        // Answer The Public service is disabled - commented out as it's no longer needed
+        // $this->mockATP->shouldReceive('getKeywordData')
+        //     ->once()
+        //     ->andReturn([]);
 
         $this->mockCombined->shouldReceive('getCombinedKeywords')
             ->once()

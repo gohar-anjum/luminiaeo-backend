@@ -63,7 +63,6 @@ class KeywordService
                     'max_keywords' => $dto->maxKeywords,
                     'enable_google_planner' => $dto->enableGooglePlanner,
                     'enable_scraper' => $dto->enableScraper,
-                    'enable_answerthepublic' => $dto->enableAnswerThePublic,
                     'enable_clustering' => $dto->enableClustering,
                     'enable_intent_scoring' => $dto->enableIntentScoring,
                 ];

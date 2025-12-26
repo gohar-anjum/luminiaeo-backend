@@ -12,7 +12,6 @@ class KeywordResearchRequestDTO
         public readonly ?int $maxKeywords = null,
         public readonly bool $enableGooglePlanner = true,
         public readonly bool $enableScraper = true,
-        public readonly bool $enableAnswerThePublic = true,
         public readonly bool $enableClustering = true,
         public readonly bool $enableIntentScoring = true,
     ) {
@@ -28,7 +27,6 @@ class KeywordResearchRequestDTO
             maxKeywords: $data['max_keywords'] ?? null,
             enableGooglePlanner: $data['enable_google_planner'] ?? true,
             enableScraper: $data['enable_scraper'] ?? true,
-            enableAnswerThePublic: $data['enable_answerthepublic'] ?? true,
             enableClustering: $data['enable_clustering'] ?? true,
             enableIntentScoring: $data['enable_intent_scoring'] ?? true,
         );
@@ -44,7 +42,6 @@ class KeywordResearchRequestDTO
             'max_keywords' => $this->maxKeywords,
             'enable_google_planner' => $this->enableGooglePlanner,
             'enable_scraper' => $this->enableScraper,
-            'enable_answerthepublic' => $this->enableAnswerThePublic,
             'enable_clustering' => $this->enableClustering,
             'enable_intent_scoring' => $this->enableIntentScoring,
         ];
