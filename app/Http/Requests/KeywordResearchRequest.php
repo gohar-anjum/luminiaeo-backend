@@ -51,10 +51,6 @@ class KeywordResearchRequest extends FormRequest
                 'nullable',
                 'boolean',
             ],
-            'enable_answerthepublic' => [
-                'nullable',
-                'boolean',
-            ],
             'enable_clustering' => [
                 'nullable',
                 'boolean',
@@ -92,7 +88,6 @@ class KeywordResearchRequest extends FormRequest
         $validated['geo_target_id'] = $validated['geo_target_id'] ?? 2840;
         $validated['enable_google_planner'] = $validated['enable_google_planner'] ?? true;
         $validated['enable_scraper'] = $validated['enable_scraper'] ?? true;
-        $validated['enable_answerthepublic'] = $validated['enable_answerthepublic'] ?? true;
         $validated['enable_clustering'] = $validated['enable_clustering'] ?? true;
         $validated['enable_intent_scoring'] = $validated['enable_intent_scoring'] ?? true;
 

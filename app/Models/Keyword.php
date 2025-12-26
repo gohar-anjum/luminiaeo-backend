@@ -10,24 +10,17 @@ class Keyword extends Model
 {
     use HasFactory;
     protected $fillable = [
-        'keyword_research_job_id',
-        'keyword_cluster_id',
         'keyword',
-        'source',
         'search_volume',
         'competition',
         'cpc',
-        'ai_visibility_score',
         'intent',
-        'intent_category',
-        'intent_metadata',
-        'question_variations',
-        'long_tail_versions',
-        'semantic_data',
         'location',
-        'language_code',
-        'geoTargetId',
     ];
+
+    // Note: The following columns are conditionally handled - only included if they exist in database:
+    // keyword_research_job_id, keyword_cluster_id, source, ai_visibility_score, intent_category,
+    // intent_metadata, question_variations, long_tail_versions, semantic_data, language_code, geoTargetId
 
     protected $casts = [
         'search_volume' => 'integer',
