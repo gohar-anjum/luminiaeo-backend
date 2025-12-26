@@ -19,9 +19,9 @@ RUN mkdir -p /app/models /app/data
 
 COPY app/ ./app/
 
-COPY prepare_dataset_for_training.py prepare_training_data.py train_model_complete.py ./
+COPY prepare_dataset_for_training.py prepare_training_data.py train_model_complete.py train_chunked.py ./
 
-RUN chmod +x prepare_dataset_for_training.py prepare_training_data.py train_model_complete.py
+RUN chmod +x prepare_dataset_for_training.py prepare_training_data.py train_model_complete.py train_chunked.py
 
 EXPOSE 8001
 

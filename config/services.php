@@ -64,10 +64,13 @@ return [
         'cache_ttl' => env('SAFE_BROWSING_CACHE_TTL', 604800),
     ],
 
+    // Answer The Public service is disabled - commented out as it's no longer needed
+    /*
     'answerthepublic' => [
         'api_key' => env('ANSWERTHEPUBLIC_API_KEY'),
         'timeout' => env('ANSWERTHEPUBLIC_TIMEOUT', 60),
     ],
+    */
 
     'keyword_clustering' => [
         'url' => env('KEYWORD_CLUSTERING_SERVICE_URL'),

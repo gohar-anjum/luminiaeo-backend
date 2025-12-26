@@ -44,3 +44,52 @@ class RuleEngine:
             velocity_data=velocity_data,
             total_peers=len(peers)
         )
+
+    def evaluate(self, backlink: BacklinkSignal, network_stats: NetworkStats) -> Dict[str, float]:
+        """Evaluate a backlink against PBN detection rules and return rule scores."""
+        scores: Dict[str, float] = {}
+
+        # Shared IP Network Rule
+        if backlink.ip and network_stats.ip_counts.get(backlink.ip, 0) > 3:
+            scores['shared_ip_network'] = min(0.4, network_stats.ip_counts[backlink.ip] / 20.0)
+
+        # Shared Registrar Network Rule
+        if backlink.whois_registrar and network_stats.registrar_counts.get(backlink.whois_registrar, 0) > 2:
+            scores['shared_registrar_network'] = min(0.3, network_stats.registrar_counts[backlink.whois_registrar] / 15.0)
+
+        # Domain Quality Rule
+        domain_quality_score = 0.0
+        if backlink.domain_rank is not None:
+            if backlink.domain_rank < 20:
+                domain_quality_score += 0.3
+            elif backlink.domain_rank < 40:
+                domain_quality_score += 0.15
+        if backlink.domain_age_days is not None and backlink.domain_age_days < 180:
+            domain_quality_score += 0.2
+        if domain_quality_score > 0:
+            scores['domain_quality'] = min(0.5, domain_quality_score)
+
+        # DataForSEO Spam Score Rule
+        if backlink.backlink_spam_score is not None:
+            if backlink.backlink_spam_score >= 60:
+                scores['dataforseo_spam_score'] = 0.4
+            elif backlink.backlink_spam_score >= 40:
+                scores['dataforseo_spam_score'] = 0.2
+
+        # Safe Browsing Rule
+        if backlink.safe_browsing_status == "flagged":
+            scores['safe_browsing_flagged'] = 0.3
+
+        # Composite Rules (combine multiple signals)
+        if 'shared_ip_network' in scores and 'domain_quality' in scores:
+            scores['high_risk_network'] = 0.25
+        if 'dataforseo_spam_score' in scores and 'shared_ip_network' in scores:
+            scores['spam_network'] = 0.3
+        if 'shared_registrar_network' in scores and 'domain_quality' in scores:
+            scores['new_domain_cluster'] = 0.2
+
+        return scores
+
+
+# Create a singleton instance
+rule_engine = RuleEngine()
