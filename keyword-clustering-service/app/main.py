@@ -37,6 +37,15 @@ class ClusterResponse(BaseModel):
     num_clusters: int = Field(..., description="Actual number of clusters created")
     cluster_sizes: Dict[int, int] = Field(..., description="Number of keywords per cluster")
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker health checks."""
+    return {
+        "status": "ok",
+        "service": "keyword-clustering",
+        "model_loaded": model is not None
+    }
+
 @app.on_event("startup")
 async def load_model():
     global model

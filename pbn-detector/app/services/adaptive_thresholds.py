@@ -73,3 +73,7 @@ class AdaptiveThresholds:
             if probability >= self.base_medium_risk:
                 return "medium"
             return "low"
+
+
+# Create a singleton instance
+adaptive_thresholds = AdaptiveThresholds()

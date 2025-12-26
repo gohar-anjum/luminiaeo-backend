@@ -113,3 +113,7 @@ class ContentSimilarityService:
             
             avg_similarity = sum(similarities) / len(similarities)
             return avg_similarity if avg_similarity >= self.threshold else 0.0
+
+
+# Create a singleton instance
+content_similarity_service = ContentSimilarityService()
