@@ -19,6 +19,7 @@ class FaqTask extends Model
         'alsoasked_search_id',
         'serp_questions',
         'alsoasked_questions',
+        'question_keywords',
         'options',
         'status',
         'error_message',
@@ -29,6 +30,7 @@ class FaqTask extends Model
     protected $casts = [
         'serp_questions' => 'array',
         'alsoasked_questions' => 'array',
+        'question_keywords' => 'array',
         'options' => 'array',
         'completed_at' => 'datetime',
     ];

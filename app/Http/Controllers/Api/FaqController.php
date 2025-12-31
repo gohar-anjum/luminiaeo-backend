@@ -68,11 +68,11 @@ class FaqController extends Controller
 
             return $this->responseModifier
                 ->setData([
-                    'task_id' => $task->task_id,
+                                                                                                                                                                                                                                                                                                                                                'task_id' => $task->task_id,
                     'status' => $task->status,
-                    'created_at' => $task->created_at->toIso8601String(),
+                    'progress' => 5,
                 ])
-                ->setMessage('FAQ task created successfully')
+                ->setMessage('FAQ generation started')
                 ->response();
 
         } catch (\InvalidArgumentException $e) {
@@ -109,30 +109,78 @@ class FaqController extends Controller
 
             $this->validateTaskOwnership($task);
 
-            $data = [
-                'task_id' => $task->task_id,
-                'status' => $task->status,
-                'created_at' => $task->created_at->toIso8601String(),
-                'updated_at' => $task->updated_at->toIso8601String(),
-            ];
+            // Get all questions (combined from SERP and AlsoAsked)
+            $allQuestions = $task->serp_questions ?? [];
+            $questionKeywords = $task->question_keywords ?? [];
 
+            // Build questions array with keywords
+            $questions = [];
+            foreach ($allQuestions as $question) {
+                $questionData = [
+                    'question' => $question,
+                    'keywords' => $questionKeywords[$question] ?? [],
+                    'has_answer' => false,
+                    'answer' => null,
+                ];
+                $questions[] = $questionData;
+            }
+
+            // If completed, merge answers with questions
             if ($task->isCompleted() && $task->faq_id) {
                 $faq = \App\Models\Faq::find($task->faq_id);
-                if ($faq) {
-                    $data['faqs'] = $faq->faqs;
-                    $data['faqs_count'] = count($faq->faqs);
-                    $data['completed_at'] = $task->completed_at?->toIso8601String();
+                if ($faq && !empty($faq->faqs)) {
+                    // Create a map of question -> answer
+                    $answerMap = [];
+                    foreach ($faq->faqs as $faqItem) {
+                        if (isset($faqItem['question']) && isset($faqItem['answer'])) {
+                            $answerMap[strtolower(trim($faqItem['question']))] = $faqItem['answer'];
+                        }
+                    }
+
+                    // Match answers to questions
+                    foreach ($questions as &$questionData) {
+                        $questionLower = strtolower(trim($questionData['question']));
+                        if (isset($answerMap[$questionLower])) {
+                            $questionData['has_answer'] = true;
+                            $questionData['answer'] = $answerMap[$questionLower];
+                        }
+                    }
+                    unset($questionData);
                 }
             }
 
-            if ($task->isFailed()) {
-                $data['error_message'] = $task->error_message;
-                $data['completed_at'] = $task->completed_at?->toIso8601String();
+            // Calculate progress percentage
+            $progress = 0;
+            if ($task->isCompleted()) {
+                $progress = 100;
+            } elseif ($task->isFailed()) {
+                $progress = 0;
+            } elseif ($task->isProcessing()) {
+                // If questions are available, we're at least 30% done
+                // If keywords are available, we're at least 60% done
+                // If processing, we're between 60-90%
+                if (!empty($allQuestions)) {
+                    if (!empty($questionKeywords)) {
+                        $progress = 70; // Keywords generated, generating answers
+                    } else {
+                        $progress = 40; // Questions available, generating keywords
+                    }
+                } else {
+                    $progress = 10; // Initial processing
+                }
+            } elseif ($task->isPending()) {
+                $progress = 5; // Just started
             }
 
-            if ($task->isProcessing() || $task->isPending()) {
-                $data['serp_questions_count'] = count($task->serp_questions ?? []);
-                $data['alsoasked_search_id'] = $task->alsoasked_search_id;
+            $data = [
+                'status' => $task->status,
+                'progress' => $progress,
+                'questions' => $questions,
+                'total_questions' => count($allQuestions),
+            ];
+
+            if ($task->isFailed()) {
+                $data['error'] = $task->error_message ?? 'An error occurred while processing';
             }
 
             return $this->responseModifier

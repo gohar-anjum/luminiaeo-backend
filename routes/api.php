@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\DataForSEO\BacklinksController;
 use App\Http\Controllers\Api\DataForSEO\DataForSEOController;
 use App\Http\Controllers\Api\KeywordPlannerController;
 use App\Http\Controllers\Api\LocationCodeController;
+use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -30,6 +31,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
         return $request->user();
     });
+
+    Route::put('/user/profile', [UserController::class, 'updateProfile'])->name('user.profile.update');
 
     Route::prefix('citations')->middleware('throttle:20,1')->group(function () {
         Route::post('/analyze', [CitationController::class, 'analyze'])->name('citations.analyze');

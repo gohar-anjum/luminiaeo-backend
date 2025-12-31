@@ -12,10 +12,12 @@ use App\Services\LLM\Support\JsonExtractor;
 use App\Services\Serp\SerpService;
 use App\Services\FAQ\AlsoAskedService;
 use App\Services\LocationCodeService;
+use App\Services\DataForSEO\DataForSEOService;
 use App\Exceptions\SerpException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class FaqGeneratorService
 {
@@ -25,6 +27,7 @@ class FaqGeneratorService
     protected PlaceholderReplacer $placeholderReplacer;
     protected ?SerpService $serpService = null;
     protected ?AlsoAskedService $alsoAskedService = null;
+    protected ?DataForSEOService $dataForSEOService = null;
     protected int $cacheTTL;
     protected int $timeout;
 
@@ -120,12 +123,27 @@ class FaqGeneratorService
             );
         }
 
+        // Fetch keywords if enabled in options (optional for synchronous flow)
+        $questionKeywords = [];
+        if (!empty($options['enable_keywords']) && $options['enable_keywords'] === true) {
+            $languageCode = $options['language_code'] ?? config('services.faq.default_language', 'en');
+            $locationCode = $options['location_code'] ?? config('services.faq.default_location', 2840);
+            $keywordsPerQuestion = $options['keywords_per_question'] ?? 10;
+            
+            $questionKeywords = $this->fetchKeywordsForQuestions(
+                $allQuestions,
+                $languageCode,
+                $locationCode,
+                $keywordsPerQuestion
+            );
+        }
+
         $faqs = null;
         $lastException = null;
 
         if ($this->shouldTryLLM('gemini')) {
             try {
-                $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options);
+                $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options, $questionKeywords);
                 $this->recordLLMSuccess('gemini');
             } catch (\Exception $geminiException) {
                 $lastException = $geminiException;
@@ -133,7 +151,7 @@ class FaqGeneratorService
 
                 if ($this->shouldTryLLM('gpt')) {
                     try {
-                        $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
+                        $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options, $questionKeywords);
                         $this->recordLLMSuccess('gpt');
                     } catch (\Exception $gptException) {
                         $lastException = $gptException;
@@ -166,7 +184,7 @@ class FaqGeneratorService
             // Circuit breaker open for Gemini, try GPT or SERP
             if ($this->shouldTryLLM('gpt')) {
                 try {
-                    $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
+                    $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options, $questionKeywords);
                     $this->recordLLMSuccess('gpt');
                 } catch (\Exception $gptException) {
                     $lastException = $gptException;
@@ -524,6 +542,119 @@ class FaqGeneratorService
         return $this->alsoAskedService;
     }
 
+    protected function getDataForSEOService(): ?DataForSEOService
+    {
+        if ($this->dataForSEOService === null) {
+            try {
+                $this->dataForSEOService = app(DataForSEOService::class);
+            } catch (\Exception $e) {
+                Log::warning('DataForSEO service not available', ['error' => $e->getMessage()]);
+                return null;
+            }
+        }
+
+        return $this->dataForSEOService;
+    }
+
+    /**
+     * Fetch keywords for each question using DataForSEO API
+     * Returns an array mapping question => [keywords]
+     */
+    public function fetchKeywordsForQuestions(array $questions, string $languageCode = 'en', int $locationCode = 2840, int $keywordsPerQuestion = 10): array
+    {
+        $dataForSEOService = $this->getDataForSEOService();
+        
+        if (!$dataForSEOService) {
+            Log::info('DataForSEO service not available, skipping keyword generation');
+            return [];
+        }
+
+        $questionKeywords = [];
+        $totalQuestions = count($questions);
+        
+        Log::info('Starting keyword generation for questions', [
+            'total_questions' => $totalQuestions,
+            'keywords_per_question' => $keywordsPerQuestion,
+        ]);
+
+        foreach ($questions as $index => $question) {
+            try {
+                Log::info('Fetching keywords for question', [
+                    'question_index' => $index + 1,
+                    'total_questions' => $totalQuestions,
+                    'question' => $question,
+                ]);
+
+                // Use the question as seed keyword to get related keywords
+                $keywords = $dataForSEOService->getKeywordIdeas(
+                    $question,
+                    $languageCode,
+                    $locationCode,
+                    $keywordsPerQuestion
+                );
+
+                // Extract just the keyword strings from DTO objects
+                $keywordStrings = [];
+                foreach ($keywords as $keywordData) {
+                    $keywordValue = null;
+                    
+                    // Check type explicitly to avoid "Cannot use object as array" errors
+                    if (is_object($keywordData)) {
+                        // Handle object (KeywordDataDTO or similar)
+                        if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
+                            $keywordValue = $keywordData->keyword;
+                        } elseif (property_exists($keywordData, 'keyword')) {
+                            $keywordValue = $keywordData->keyword;
+                        }
+                    } elseif (is_string($keywordData)) {
+                        // Handle string format directly
+                        $keywordValue = $keywordData;
+                    } elseif (is_array($keywordData)) {
+                        // Handle array format - safe to use array syntax now
+                        $keywordValue = $keywordData['keyword'] ?? null;
+                    }
+                    
+                    // Only add if we found a valid keyword value
+                    if ($keywordValue !== null && !empty(trim($keywordValue))) {
+                        $keywordStrings[] = trim($keywordValue);
+                    }
+                }
+
+                // Limit to requested number
+                $keywordStrings = array_slice($keywordStrings, 0, $keywordsPerQuestion);
+                
+                $questionKeywords[$question] = $keywordStrings;
+
+                Log::info('Keywords fetched for question', [
+                    'question' => $question,
+                    'keywords_count' => count($keywordStrings),
+                ]);
+
+                // Small delay to avoid rate limiting
+                usleep(100000); // 0.1 second
+
+            } catch (\Exception $e) {
+                Log::warning('Failed to fetch keywords for question', [
+                    'question' => $question,
+                    'error' => $e->getMessage(),
+                ]);
+                // Continue with other questions even if one fails
+                // Set empty array to mark that we tried this question
+                $questionKeywords[$question] = [];
+            }
+        }
+
+        $questionsWithKeywords = count(array_filter($questionKeywords, fn($kws) => is_array($kws) && !empty($kws)));
+        
+        Log::info('Keyword generation completed', [
+            'total_questions' => $totalQuestions,
+            'questions_with_keywords' => $questionsWithKeywords,
+            'total_keywords' => array_sum(array_map(fn($kws) => is_array($kws) ? count($kws) : 0, $questionKeywords)),
+        ]);
+
+        return $questionKeywords;
+    }
+
     public function combineQuestions(array $serpQuestions, array $alsoAskedQuestions): array
     {
         $allQuestions = array_merge($serpQuestions, $alsoAskedQuestions);
@@ -557,7 +688,8 @@ class FaqGeneratorService
             }
         }
 
-        return array_slice($uniqueQuestions, 0, 30);
+        // Limit to 10 questions maximum
+        return array_slice($uniqueQuestions, 0, 10);
     }
 
     protected function validateQuestionsUsage(array $faqs, array $sourceQuestions): void
@@ -602,7 +734,7 @@ class FaqGeneratorService
         return count($commonWords) / $totalWords;
     }
 
-    public function generateFaqsWithGemini(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): array
+    public function generateFaqsWithGemini(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options, array $questionKeywords = []): array
     {
         $config = config('citations.gemini');
 
@@ -610,7 +742,7 @@ class FaqGeneratorService
             throw new \RuntimeException('Gemini API key is not configured. Please set GOOGLE_API_KEY in your .env file.');
         }
 
-        $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options);
+        $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options, $questionKeywords);
 
         $payload = [
             'contents' => [
@@ -659,7 +791,7 @@ class FaqGeneratorService
         }
     }
 
-    protected function buildFaqPrompt(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): string
+    protected function buildFaqPrompt(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options, array $questionKeywords = []): string
     {
         $template = $this->promptLoader->load('faq/generation');
 
@@ -680,14 +812,32 @@ class FaqGeneratorService
 
         $questionsSection = '';
         if (!empty($serpQuestions)) {
-            $questionsList = implode("\n", array_map(function ($question, $index) {
-                return ($index + 1) . ". " . $question;
+            $questionsList = implode("\n", array_map(function ($question, $index) use ($questionKeywords) {
+                $line = ($index + 1) . ". " . $question;
+                
+                // Add keywords if available for this question
+                if (!empty($questionKeywords[$question]) && is_array($questionKeywords[$question])) {
+                    $keywords = implode(', ', array_slice($questionKeywords[$question], 0, 10));
+                    $line .= " [Keywords: {$keywords}]";
+                }
+                
+                return $line;
             }, $serpQuestions, array_keys($serpQuestions)));
 
             $questionsSection = "*** CRITICAL: QUESTIONS TO ANSWER (from SERP and AlsoAsked.io) ***\n";
             $questionsSection .= "You MUST answer these questions. DO NOT create your own questions. ";
             $questionsSection .= "These are real questions that users are actively searching for. ";
             $questionsSection .= "You must provide comprehensive answers for at least 8-10 of these questions.\n\n";
+            
+            // Add keyword optimization instructions if keywords are available
+            if (!empty($questionKeywords)) {
+                $questionsSection .= "*** SEO KEYWORD OPTIMIZATION ***\n";
+                $questionsSection .= "Each question includes relevant SEO keywords in brackets. ";
+                $questionsSection .= "When answering each question, naturally incorporate these keywords into your answer ";
+                $questionsSection .= "to improve search engine optimization. Use the keywords organically and contextually ";
+                $questionsSection .= "within your answer - do not force them in unnaturally.\n\n";
+            }
+            
             $questionsSection .= "QUESTIONS TO ANSWER:\n";
             $questionsSection .= "{$questionsList}\n\n";
             $questionsSection .= "*** YOUR TASK: Answer these questions based on the provided content. ";
@@ -717,7 +867,7 @@ class FaqGeneratorService
         throw new \RuntimeException('Invalid Gemini API response structure');
     }
 
-    public function generateFaqsWithGPT(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options): array
+    public function generateFaqsWithGPT(?string $url, ?string $topic, ?string $urlContent, array $serpQuestions, array $options, array $questionKeywords = []): array
     {
         $config = config('citations.openai');
 
@@ -725,7 +875,7 @@ class FaqGeneratorService
             throw new \RuntimeException('OpenAI API key is not configured. Please set OPENAI_API_KEY in your .env file.');
         }
 
-        $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options);
+        $prompt = $this->buildFaqPrompt($url, $topic, $urlContent, $serpQuestions, $options, $questionKeywords);
 
         $messages = [
             [
@@ -1071,6 +1221,39 @@ class FaqGeneratorService
             
             if ($existingTask) {
                 return $existingTask;
+            }
+            
+            // Check for failed task with questions but no keywords - allow retry
+            $failedTask = \App\Models\FaqTask::where('url', $url)
+                ->where('topic', $topic)
+                ->where('status', 'failed')
+                ->whereNotNull('serp_questions')
+                ->orderBy('created_at', 'desc')
+                ->first();
+            
+            if ($failedTask) {
+                // Check if keywords are missing or empty
+                $hasKeywords = false;
+                if (!empty($failedTask->question_keywords) && is_array($failedTask->question_keywords)) {
+                    $totalKeywords = 0;
+                    foreach ($failedTask->question_keywords as $keywords) {
+                        if (is_array($keywords) && !empty($keywords)) {
+                            $totalKeywords += count($keywords);
+                        }
+                    }
+                    $hasKeywords = $totalKeywords > 0;
+                }
+                
+                // If questions exist but no keywords, reset and retry
+                if (!$hasKeywords && !empty($failedTask->serp_questions)) {
+                    $failedTask->update([
+                        'status' => 'pending',
+                        'error_message' => null,
+                    ]);
+                    // Dispatch job to continue from keyword generation
+                    \App\Jobs\ProcessFaqTask::dispatch($failedTask->id);
+                    return $failedTask;
+                }
             }
 
             $serpQuestions = $this->fetchSerpQuestions($url, $topic);

@@ -23,8 +23,16 @@ class ProcessFaqTask implements ShouldQueue
     {
         $task = FaqTask::find($this->taskId);
         
-        if (!$task || $task->isCompleted() || $task->isFailed()) {
+        if (!$task || $task->isCompleted()) {
             return;
+        }
+
+        // Allow retrying failed tasks - reset status if it was failed
+        if ($task->isFailed()) {
+            $task->update([
+                'status' => 'pending',
+                'error_message' => null,
+            ]);
         }
 
         $task->markAsProcessing();
@@ -96,6 +104,59 @@ class ProcessFaqTask implements ShouldQueue
                 return;
             }
 
+            // Save combined questions immediately so frontend can display them
+            // This happens as soon as AlsoAsked response is received
+            $task->update(['serp_questions' => $allQuestions]);
+
+            // Fetch keywords for each question using DataForSEO
+            $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
+            $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
+            $keywordsPerQuestion = $task->options['keywords_per_question'] ?? 10;
+
+            $questionKeywords = [];
+            $hasValidKeywords = false;
+            
+            // Check if we have valid keywords (not just empty arrays)
+            if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
+                // Check if keywords are actually populated (not all empty arrays)
+                $totalKeywords = 0;
+                foreach ($task->question_keywords as $question => $keywords) {
+                    if (is_array($keywords) && !empty($keywords)) {
+                        $totalKeywords += count($keywords);
+                    }
+                }
+                
+                // If we have keywords for at least some questions, use them
+                if ($totalKeywords > 0) {
+                    $questionKeywords = $task->question_keywords;
+                    $hasValidKeywords = true;
+                }
+            }
+            
+            // If no valid keywords, fetch them
+            if (!$hasValidKeywords) {
+                try {
+                    // Fetch keywords for questions
+                    $questionKeywords = $faqGeneratorService->fetchKeywordsForQuestions(
+                        $allQuestions,
+                        $languageCode,
+                        $locationCode,
+                        $keywordsPerQuestion
+                    );
+                    
+                    // Store keywords in task for future reference (even if empty, to avoid retrying)
+                    $task->update(['question_keywords' => $questionKeywords]);
+                } catch (\Exception $keywordException) {
+                    // Log the error but continue without keywords
+                    \Illuminate\Support\Facades\Log::error('Failed to fetch keywords for FAQ questions', [
+                        'task_id' => $task->id,
+                        'error' => $keywordException->getMessage(),
+                    ]);
+                    // Continue with empty keywords - answers will still be generated
+                    $questionKeywords = [];
+                }
+            }
+
             $urlContent = null;
             if ($task->url) {
                 $urlContent = $faqGeneratorService->fetchUrlContent($task->url);
@@ -112,7 +173,8 @@ class ProcessFaqTask implements ShouldQueue
                     $task->topic,
                     $urlContent,
                     $allQuestions,
-                    $task->options ?? []
+                    $task->options ?? [],
+                    $questionKeywords
                 );
             } catch (\Exception $geminiException) {
                 $lastException = $geminiException;
@@ -124,7 +186,8 @@ class ProcessFaqTask implements ShouldQueue
                         $task->topic,
                         $urlContent,
                         $allQuestions,
-                        $task->options ?? []
+                        $task->options ?? [],
+                        $questionKeywords
                     );
                 } catch (\Exception $gptException) {
                     $lastException = $gptException;
