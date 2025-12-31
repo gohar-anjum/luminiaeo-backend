@@ -10,4 +10,5 @@ scipy==1.11.4
 requests>=2.31.0
 setuptools>=65.0.0
 wheel
+redis>=5.0.0
 

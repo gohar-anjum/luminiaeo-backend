@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -62,6 +63,13 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
         if not request.backlinks:
             raise HTTPException(status_code=400, detail="Backlinks payload cannot be empty")
 
+        max_backlinks = int(os.getenv('PBN_MAX_BACKLINKS', '1000'))
+        if len(request.backlinks) > max_backlinks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum {max_backlinks} backlinks allowed per request"
+            )
+
         start = time.perf_counter()
         peers = request.backlinks
         items: list[DetectionItem] = []
@@ -91,18 +99,30 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
 
         enhanced_features_map = {}
         if settings.use_enhanced_features:
-            for backlink in peers:
-                try:
-                    enhanced_features_map[backlink.source_url] = enhanced_feature_extractor.extract_all_enhanced_features(
-                        backlink, peers
-                    )
-                except Exception as e:
-                    logger.warning("Enhanced feature extraction failed",
-                                 backlink=str(backlink.source_url), error=str(e))
-                    enhanced_features_map[backlink.source_url] = {}
+            if settings.use_parallel_processing and len(peers) > settings.parallel_threshold:
+                def extract_features(backlink):
+                    try:
+                        return backlink.source_url, enhanced_feature_extractor.extract_all_enhanced_features(backlink, peers)
+                    except Exception as e:
+                        logger.warning("Enhanced feature extraction failed", backlink=str(backlink.source_url), error=str(e))
+                        return backlink.source_url, {}
+                
+                with ThreadPoolExecutor(max_workers=settings.parallel_workers) as executor:
+                    results = executor.map(extract_features, peers)
+                    enhanced_features_map = dict(results)
+            else:
+                for backlink in peers:
+                    try:
+                        enhanced_features_map[backlink.source_url] = enhanced_feature_extractor.extract_all_enhanced_features(
+                            backlink, peers
+                        )
+                    except Exception as e:
+                        logger.warning("Enhanced feature extraction failed",
+                                     backlink=str(backlink.source_url), error=str(e))
+                        enhanced_features_map[backlink.source_url] = {}
 
         summary = DetectionSummary()
-        if settings.use_parallel_processing and len(peers) > 50:
+        if settings.use_parallel_processing and len(peers) > settings.parallel_threshold:
             items = await _process_backlinks_parallel(
                 peers, network_features, network_stats, enhanced_features_map,
                 network_content_similarity, adaptive_thresholds_dict, summary, settings

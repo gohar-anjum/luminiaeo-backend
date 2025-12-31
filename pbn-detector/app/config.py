@@ -19,12 +19,14 @@ class Settings(BaseSettings):
 
     classifier_model_path: str = "models/pbn_lr.joblib"
     minhash_threshold: float = 0.8
-    high_risk_threshold: float = 0.75
-    medium_risk_threshold: float = 0.5
+    high_risk_threshold: float = float(os.getenv('PBN_HIGH_RISK_THRESHOLD', '0.75'))
+    medium_risk_threshold: float = float(os.getenv('PBN_MEDIUM_RISK_THRESHOLD', '0.5'))
     use_ensemble: bool = True
     use_enhanced_features: bool = True
     use_parallel_processing: bool = True
-    parallel_workers: int = 4
+    parallel_workers: int = int(os.getenv('PBN_PARALLEL_WORKERS', '4'))
+    parallel_threshold: int = int(os.getenv('PBN_PARALLEL_THRESHOLD', '50'))
+    max_backlinks: int = int(os.getenv('PBN_MAX_BACKLINKS', '1000'))
 
     class Config:
         env_file = ".env"
