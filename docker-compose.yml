@@ -220,6 +220,25 @@ services:
       timeout: 10s
       retries: 3
 
+  # phpMyAdmin
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: luminiaeo_phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "${PHPMYADMIN_PORT:-8080}:80"
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - PMA_USER=${DB_USERNAME:-luminiaeo}
+      - PMA_PASSWORD=${DB_PASSWORD:-password}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-rootpassword}
+      - UPLOAD_LIMIT=300M
+    networks:
+      - luminiaeo-network
+    depends_on:
+      - mysql
+
 volumes:
   mysql_data:
     driver: local
