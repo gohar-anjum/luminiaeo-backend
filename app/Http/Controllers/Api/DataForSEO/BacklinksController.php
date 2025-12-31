@@ -10,11 +10,13 @@ use App\Http\Requests\BacklinksResultsRequest;
 use App\Http\Requests\BacklinksSubmitRequest;
 use App\Interfaces\DataForSEO\BacklinksRepositoryInterface;
 use App\Services\ApiResponseModifier;
+use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
 
 class BacklinksController extends Controller
 {
+    use ValidatesResourceOwnership;
     protected BacklinksRepositoryInterface $repository;
     protected ApiResponseModifier $responseModifier;
 
@@ -29,9 +31,10 @@ class BacklinksController extends Controller
         try {
             $validated = $request->validated();
 
+            $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
             $seoTask = $this->repository->createTask(
                 $validated['domain'],
-                $validated['limit'] ?? 100
+                $validated['limit'] ?? $defaultLimit
             );
 
             $payload = $seoTask->result ?? [];
@@ -84,6 +87,8 @@ class BacklinksController extends Controller
                     ->response();
             }
 
+            $this->validateSeoTaskOwnership($seoTask);
+
             $payload = $seoTask->result ?? [];
 
             return $this->responseModifier
@@ -117,6 +122,8 @@ class BacklinksController extends Controller
                     ->setResponseCode(404)
                     ->response();
             }
+
+            $this->validateSeoTaskOwnership($seoTask);
 
             return $this->responseModifier
                 ->setData([

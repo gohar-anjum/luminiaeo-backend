@@ -10,6 +10,9 @@ use Illuminate\Database\Eloquent\Builder;
 class KeywordCache extends Model
 {
     use HasFactory;
+
+    protected $table = 'keyword_cache';
+
     protected $fillable = [
         'keyword',
         'language_code',

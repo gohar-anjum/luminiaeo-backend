@@ -6,10 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\FaqGenerationRequest;
 use App\Services\ApiResponseModifier;
 use App\Services\FAQ\FaqGeneratorService;
+use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\JsonResponse;
 
 class FaqController extends Controller
 {
+    use ValidatesResourceOwnership;
     protected FaqGeneratorService $faqService;
     protected ApiResponseModifier $responseModifier;
 
@@ -104,6 +106,8 @@ class FaqController extends Controller
                     ->setResponseCode(404)
                     ->response();
             }
+
+            $this->validateTaskOwnership($task);
 
             $data = [
                 'task_id' => $task->task_id,

@@ -46,35 +46,11 @@ class KeywordResearchJob extends Model
 
     public function keywords(): HasMany
     {
-        // Check if the foreign key column exists before defining the relationship
-        try {
-            $columns = \Illuminate\Support\Facades\Schema::getColumnListing('keywords');
-            if (!in_array('keyword_research_job_id', $columns)) {
-                // Return a relationship that won't execute queries
-                return $this->hasMany(Keyword::class, 'id', 'id')->whereRaw('1 = 0');
-            }
-        } catch (\Exception $e) {
-            // If we can't check, return a safe relationship
-            return $this->hasMany(Keyword::class, 'id', 'id')->whereRaw('1 = 0');
-        }
-        
         return $this->hasMany(Keyword::class);
     }
 
     public function clusters(): HasMany
     {
-        // Check if the foreign key column exists before defining the relationship
-        try {
-            $columns = \Illuminate\Support\Facades\Schema::getColumnListing('keyword_clusters');
-            if (!in_array('keyword_research_job_id', $columns)) {
-                // Return a relationship that won't execute queries
-                return $this->hasMany(KeywordCluster::class, 'id', 'id')->whereRaw('1 = 0');
-            }
-        } catch (\Exception $e) {
-            // If we can't check, return a safe relationship
-            return $this->hasMany(KeywordCluster::class, 'id', 'id')->whereRaw('1 = 0');
-        }
-        
         return $this->hasMany(KeywordCluster::class);
     }
 

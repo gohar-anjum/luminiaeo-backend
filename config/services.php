@@ -37,6 +37,37 @@ return [
         'password' => env('DATAFORSEO_PASSWORD'),
         'timeout'  => env('DATAFORSEO_TIMEOUT', 60),
         'cache_ttl' => env('DATAFORSEO_CACHE_TTL', 86400),
+        'max_concurrent_requests' => env('DATAFORSEO_MAX_CONCURRENT_REQUESTS', 5),
+        // Search Volume API limits
+        'search_volume' => [
+            'max_keywords' => env('DATAFORSEO_SEARCH_VOLUME_MAX_KEYWORDS', 100),
+            'batch_size' => env('DATAFORSEO_SEARCH_VOLUME_BATCH_SIZE', 100),
+        ],
+        // Citation API limits
+        'citation' => [
+            'enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
+            'max_depth' => env('DATAFORSEO_CITATION_MAX_DEPTH', 100),
+            'default_depth' => env('DATAFORSEO_CITATION_DEFAULT_DEPTH', 10),
+            'chunk_size' => env('DATAFORSEO_CITATION_CHUNK_SIZE', 25),
+            'max_queries' => env('DATAFORSEO_CITATION_MAX_QUERIES', 5000),
+        ],
+        // Backlinks API limits
+        'backlinks' => [
+            'default_limit' => env('DATAFORSEO_BACKLINKS_DEFAULT_LIMIT', 100),
+            'max_limit' => env('DATAFORSEO_BACKLINKS_MAX_LIMIT', 1000),
+            'summary_limit' => env('DATAFORSEO_BACKLINKS_SUMMARY_LIMIT', 100),
+        ],
+        // Keywords for Site API limits
+        'keywords_for_site' => [
+            'max_limit' => env('DATAFORSEO_KEYWORDS_FOR_SITE_MAX_LIMIT', 1000),
+            'default_limit' => env('DATAFORSEO_KEYWORDS_FOR_SITE_DEFAULT_LIMIT', 100),
+        ],
+        // Keyword Ideas API limits
+        'keyword_ideas' => [
+            'max_limit' => env('DATAFORSEO_KEYWORD_IDEAS_MAX_LIMIT', 1000),
+            'default_limit' => env('DATAFORSEO_KEYWORD_IDEAS_DEFAULT_LIMIT', 100),
+        ],
+        // Legacy support (deprecated, use nested configs above)
         'backlinks_limit' => env('DATAFORSEO_BACKLINKS_LIMIT', 100),
         'summary_limit' => env('DATAFORSEO_SUMMARY_LIMIT', 100),
         'citation_enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
@@ -86,7 +117,14 @@ return [
 
     'faq' => [
         'timeout' => env('FAQ_GENERATOR_TIMEOUT', 60),
-        'cache_ttl' => env('FAQ_GENERATOR_CACHE_TTL', 2592000), 
+        'cache_ttl' => env('FAQ_GENERATOR_CACHE_TTL', 2592000),
+        'default_language' => env('FAQ_DEFAULT_LANGUAGE', 'en'),
+        'default_location' => env('FAQ_DEFAULT_LOCATION', 2840),
+    ],
+
+    'citations' => [
+        'default_location_code' => env('CITATIONS_DEFAULT_LOCATION_CODE', 2840),
+        'default_language_code' => env('CITATIONS_DEFAULT_LANGUAGE_CODE', 'en'),
     ],
 
     'alsoasked' => [

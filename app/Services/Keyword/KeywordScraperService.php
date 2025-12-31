@@ -99,7 +99,6 @@ class KeywordScraperService
                         $questions[] = new KeywordDataDTO(
                             keyword: $question,
                             source: 'scraper_paa',
-                            questionVariations: [$question],
                         );
                     }
                 }
@@ -199,7 +198,6 @@ class KeywordScraperService
             $questions[] = new KeywordDataDTO(
                 keyword: "$starter $keyword",
                 source: 'scraper_paa_generated',
-                questionVariations: ["$starter $keyword"],
             );
         }
 

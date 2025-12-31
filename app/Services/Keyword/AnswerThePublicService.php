@@ -106,7 +106,6 @@ class AnswerThePublicService
                     $keywords[] = new KeywordDataDTO(
                         keyword: $question,
                         source: 'answerthepublic_questions',
-                        questionVariations: [$question],
                     );
                 }
             }
@@ -163,7 +162,6 @@ class AnswerThePublicService
                     $keywords[] = new KeywordDataDTO(
                         keyword: $question,
                         source: 'answerthepublic_questions',
-                        questionVariations: [$question],
                     );
                 }
             }

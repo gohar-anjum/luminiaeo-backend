@@ -64,13 +64,14 @@ class KeywordResearchOrchestratorService
 
         $this->updateProgress($job, 'clustering', 50);
 
-        if ($settings['enable_clustering'] ?? true) {
-            $numClusters = min(10, max(3, (int) (count($allKeywords) / 20)));
-
-            $clusteringResult = $this->clusteringService->clusterKeywords($allKeywords, $numClusters, true);
-
-            $this->storeClusters($job, $clusteringResult);
-        }
+        // Clustering functionality temporarily disabled - keyword_clusters table not available
+        // if ($settings['enable_clustering'] ?? true) {
+        //     $numClusters = min(10, max(3, (int) (count($allKeywords) / 20)));
+        //
+        //     $clusteringResult = $this->clusteringService->clusterKeywords($allKeywords, $numClusters, true);
+        //
+        //     $this->storeClusters($job, $clusteringResult);
+        // }
 
         $this->updateProgress($job, 'intent_scoring', 70);
 
@@ -98,7 +99,15 @@ class KeywordResearchOrchestratorService
 
         $useGooglePlanner = $settings['enable_google_planner'] ?? true;
         $useDataForSEOPlanner = config('services.dataforseo.keyword_planner_enabled', false);
-
+        
+        // Skip Google Planner if DataForSEO is enabled via config
+        if ($useDataForSEOPlanner) {
+            Log::info('Skipping Google Keyword Planner - DataForSEO service is active', [
+                'job_id' => $job->id,
+            ]);
+            $useGooglePlanner = false;
+        }
+        
         if ($useGooglePlanner && !$useDataForSEOPlanner) {
             try {
                 $maxPlannerKeywords = null;
@@ -123,15 +132,11 @@ class KeywordResearchOrchestratorService
                     'job_id' => $job->id,
                     'error' => $e->getMessage(),
                 ]);
-                
-                if ($useDataForSEOPlanner && $this->dataForSEOService) {
-                    Log::info('Falling back to DataForSEO Keyword Planner', ['job_id' => $job->id]);
-                    $useGooglePlanner = false;
-                }
             }
         }
 
-        if (($useDataForSEOPlanner || !$useGooglePlanner) && $this->dataForSEOService) {
+        // Use DataForSEO if enabled via config
+        if ($useDataForSEOPlanner) {
             try {
                 $maxPlannerKeywords = null;
                 if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
@@ -158,7 +163,7 @@ class KeywordResearchOrchestratorService
             }
         }
 
-        if ($settings['enable_scraper'] ?? true) {
+       /* if ($settings['enable_scraper'] ?? true) {
             try {
                 $scraperKeywords = $this->scraperService->scrapeAll($seedKeyword, $languageCode);
                 $allKeywords = array_merge($allKeywords, $scraperKeywords);
@@ -173,9 +178,9 @@ class KeywordResearchOrchestratorService
                     'error' => $e->getMessage(),
                 ]);
             }
-        }
+        }*/
 
-        if ($settings['enable_combined_keywords'] ?? true) {
+       /* if ($settings['enable_combined_keywords'] ?? true) {
             try {
                 $maxCombinedKeywords = null;
                 if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
@@ -201,7 +206,7 @@ class KeywordResearchOrchestratorService
                     'trace' => $e->getTraceAsString(),
                 ]);
             }
-        }
+        }*/
 
         return $this->deduplicateKeywords($allKeywords);
     }
@@ -210,7 +215,6 @@ class KeywordResearchOrchestratorService
     {
         $keywordIds = [];
 
-        // Load user relationship if needed for project_id
         if (!$job->relationLoaded('user')) {
             $job->load('user');
         }
@@ -219,22 +223,111 @@ class KeywordResearchOrchestratorService
             $batchSize = 500;
             $batches = array_chunk($keywords, $batchSize);
 
-            // Get available columns from database - check once per transaction
-            $keywordColumns = [];
-            try {
-                $columns = Schema::getColumnListing('keywords');
-                // Convert to associative array for faster lookups
-                $keywordColumns = array_flip($columns);
-            } catch (\Exception $e) {
-                // If we can't get columns, use empty array - only basic columns will be inserted
-                $keywordColumns = [];
+            // Detect which columns exist in the keywords table
+            $existingColumns = Schema::getColumnListing('keywords');
+            $keywordColumns = array_flip($existingColumns);
+
+            $projectId = $job->project_id ?? null;
+            $projectSource = null;
+            
+            if ($projectId) {
+                $projectSource = 'job';
+            } elseif ($job->user_id) {
+                Log::info('Job does not have project_id, attempting to get user\'s first project', [
+                    'job_id' => $job->id,
+                    'user_id' => $job->user_id,
+                ]);
+                
+                $firstProject = DB::table('projects')
+                    ->where('user_id', $job->user_id)
+                    ->first();
+                $projectId = $firstProject?->id ?? null;
+                
+                if ($projectId) {
+                    $projectSource = 'user_first_project';
+                    Log::info('Found project_id from user\'s first project', [
+                        'job_id' => $job->id,
+                        'project_id' => $projectId,
+                    ]);
+                }
             }
+            
+            if ($projectId === null && $job->user_id) {
+                Log::info('User has no projects, auto-creating default project', [
+                    'job_id' => $job->id,
+                    'user_id' => $job->user_id,
+                ]);
+                
+                try {
+                    $projectId = DB::table('projects')->insertGetId([
+                        'user_id' => $job->user_id,
+                        'name' => 'Default Project',
+                        'domain' => null,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                    
+                    $projectSource = 'auto_created';
+                    Log::info('Auto-created default project for user', [
+                        'job_id' => $job->id,
+                        'user_id' => $job->user_id,
+                        'project_id' => $projectId,
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to auto-create default project', [
+                        'job_id' => $job->id,
+                        'user_id' => $job->user_id,
+                        'error' => $e->getMessage(),
+                    ]);
+                    throw new \RuntimeException(
+                        'Cannot insert keywords: project_id is required. Failed to auto-create default project: ' . $e->getMessage()
+                    );
+                }
+            }
+            
+            if ($projectId === null) {
+                Log::error('Cannot resolve project_id for keyword insertion', [
+                    'job_id' => $job->id,
+                    'job_project_id' => $job->project_id,
+                    'user_id' => $job->user_id,
+                ]);
+                
+                throw new \RuntimeException(
+                    'Cannot insert keywords: project_id is required but not found. ' .
+                    'Please ensure the keyword research job has a valid project_id or the user has at least one project.'
+                );
+            }
+            
+            Log::info('Resolved project_id for keyword insertion', [
+                'job_id' => $job->id,
+                'project_id' => $projectId,
+                'source' => $projectSource,
+            ]);
 
             foreach ($batches as $batch) {
                 $insertData = [];
+                $existingKeywordIds = [];
                 $now = now();
 
                 foreach ($batch as $keywordDTO) {
+                    // Check if keyword already exists for this job
+                    $existingKeyword = null;
+                    if (isset($keywordColumns['keyword_research_job_id'])) {
+                        $existingKeyword = Keyword::where('keyword', $keywordDTO->keyword)
+                            ->where('keyword_research_job_id', $job->id)
+                            ->first();
+                    } else {
+                        $existingKeyword = Keyword::where('keyword', $keywordDTO->keyword)
+                            ->where('project_id', $projectId)
+                            ->first();
+                    }
+
+                    if ($existingKeyword) {
+                        // Keyword already exists for this job, use existing ID
+                        $existingKeywordIds[] = $existingKeyword->id;
+                        continue;
+                    }
+
                     $row = [
                         'keyword' => $keywordDTO->keyword,
                         'search_volume' => $keywordDTO->searchVolume,
@@ -246,12 +339,9 @@ class KeywordResearchOrchestratorService
                         'updated_at' => $now,
                     ];
 
-                    // Include required columns if they exist in database
                     if (!empty($keywordColumns)) {
-                        // project_id is required if column exists - get from user
                         if (isset($keywordColumns['project_id'])) {
-                            // User should already be loaded before transaction
-                            $row['project_id'] = $job->user->project_id ?? $job->user_id ?? null;
+                            $row['project_id'] = $projectId;
                         }
                         if (isset($keywordColumns['keyword_research_job_id'])) {
                             $row['keyword_research_job_id'] = $job->id;
@@ -271,12 +361,6 @@ class KeywordResearchOrchestratorService
                         if (isset($keywordColumns['intent_metadata']) && $keywordDTO->intentMetadata) {
                             $row['intent_metadata'] = json_encode($keywordDTO->intentMetadata);
                         }
-                        if (isset($keywordColumns['question_variations']) && $keywordDTO->questionVariations) {
-                            $row['question_variations'] = json_encode($keywordDTO->questionVariations);
-                        }
-                        if (isset($keywordColumns['long_tail_versions']) && $keywordDTO->longTailVersions) {
-                            $row['long_tail_versions'] = json_encode($keywordDTO->longTailVersions);
-                        }
                         if (isset($keywordColumns['ai_visibility_score'])) {
                             $row['ai_visibility_score'] = $keywordDTO->aiVisibilityScore ?? null;
                         }
@@ -288,18 +372,31 @@ class KeywordResearchOrchestratorService
                     $insertData[] = $row;
                 }
 
-                Keyword::insert($insertData);
+                // Insert new keywords
+                if (!empty($insertData)) {
+                    try {
+                        Keyword::insert($insertData);
+                    } catch (\Exception $e) {
+                        Log::warning('Some keywords may have failed to insert', [
+                            'job_id' => $job->id,
+                            'error' => $e->getMessage(),
+                            'batch_size' => count($insertData),
+                        ]);
+                    }
+                }
 
-                // Get inserted keyword IDs - only use keyword_research_job_id if column exists
+                // Get IDs of all keywords for this job (both newly inserted and existing)
                 $keywordTexts = array_map(fn($dto) => $dto->keyword, $batch);
                 $query = Keyword::whereIn('keyword', $keywordTexts);
                 
                 if (isset($keywordColumns['keyword_research_job_id'])) {
                     $query->where('keyword_research_job_id', $job->id);
+                } else {
+                    $query->where('project_id', $projectId);
                 }
                 
                 $insertedKeywords = $query->pluck('id')->toArray();
-                $keywordIds = array_merge($keywordIds, $insertedKeywords);
+                $keywordIds = array_merge($keywordIds, $insertedKeywords, $existingKeywordIds);
             }
         });
 
@@ -328,8 +425,8 @@ class KeywordResearchOrchestratorService
 
             foreach ($clusteringResult['keyword_cluster_map'] as $keywordText => $clusterIndex) {
                 if (isset($clusterModels[$clusterIndex])) {
-                    Keyword::where('keyword_research_job_id', $job->id)
-                        ->where('keyword', $keywordText)
+                    Keyword::where('keyword', $keywordText)
+                        ->where('keyword_research_job_id', $job->id)
                         ->update(['keyword_cluster_id' => $clusterModels[$clusterIndex]->id]);
                 }
             }
@@ -345,51 +442,71 @@ class KeywordResearchOrchestratorService
 
     protected function generateResult(KeywordResearchJob $job): array
     {
-
+        // Get available columns to avoid selecting non-existent columns
+        $existingColumns = Schema::getColumnListing('keywords');
+        $columnMap = array_flip($existingColumns);
+        
+        // Build select array with only existing columns
+        $selectColumns = ['id', 'keyword', 'search_volume', 'competition', 'cpc'];
+        $optionalColumns = ['source', 'intent_category', 'ai_visibility_score'];
+        
+        foreach ($optionalColumns as $col) {
+            if (isset($columnMap[$col])) {
+                $selectColumns[] = $col;
+            }
+        }
+        
+        // Explicitly filter out question_variations if it somehow got added
+        $selectColumns = array_filter($selectColumns, fn($col) => $col !== 'question_variations');
+        
+        Log::debug('Keyword select columns', [
+            'columns' => $selectColumns,
+            'existing_columns' => $existingColumns,
+        ]);
+        
         $keywords = $job->keywords()
-            ->with('cluster:id,topic_name,description')
-            ->select([
-                'id', 'keyword', 'source', 'search_volume', 'competition', 'cpc',
-                'intent_category', 'ai_visibility_score', 'keyword_cluster_id', 'question_variations'
-            ])
+            ->select($selectColumns)
             ->get();
 
-        $clusters = $job->clusters()
-            ->withCount('keywords')
-            ->get();
+        // Calculate sources safely
+        $sources = [];
+        if (isset($columnMap['source'])) {
+            $sources = $keywords->groupBy('source')->map->count()->toArray();
+        }
+        
+        // Calculate avg AI visibility score safely
+        $avgAiVisibilityScore = null;
+        if (isset($columnMap['ai_visibility_score'])) {
+            $avgAiVisibilityScore = $keywords->whereNotNull('ai_visibility_score')->avg('ai_visibility_score');
+        }
 
         return [
             'summary' => [
                 'total_keywords' => $keywords->count(),
-                'total_clusters' => $clusters->count(),
-                'sources' => $keywords->groupBy('source')->map->count(),
-                'avg_ai_visibility_score' => $keywords->whereNotNull('ai_visibility_score')->avg('ai_visibility_score'),
+                'sources' => $sources,
+                'avg_ai_visibility_score' => $avgAiVisibilityScore,
             ],
-            'keywords' => $keywords->map(function ($keyword) {
-                return [
+            'keywords' => $keywords->map(function ($keyword) use ($columnMap) {
+                $result = [
                     'id' => $keyword->id,
                     'keyword' => $keyword->keyword,
-                    'source' => $keyword->source,
                     'search_volume' => $keyword->search_volume,
                     'competition' => $keyword->competition,
                     'cpc' => $keyword->cpc,
-                    'intent_category' => $keyword->intent_category,
-                    'ai_visibility_score' => $keyword->ai_visibility_score,
-                    'cluster_id' => $keyword->keyword_cluster_id,
-                    'question_variations' => $keyword->question_variations,
                 ];
-            }),
-            'clusters' => $clusters->map(function ($cluster) {
-                return [
-                    'id' => $cluster->id,
-                    'topic_name' => $cluster->topic_name,
-                    'description' => $cluster->description,
-                    'keyword_count' => $cluster->keyword_count,
-                    'suggested_article_titles' => $cluster->suggested_article_titles,
-                    'recommended_faq_questions' => $cluster->recommended_faq_questions,
-                    'schema_suggestions' => $cluster->schema_suggestions,
-                    'ai_visibility_projection' => $cluster->ai_visibility_projection,
-                ];
+                
+                // Add optional fields only if they exist
+                if (isset($columnMap['source'])) {
+                    $result['source'] = $keyword->source;
+                }
+                if (isset($columnMap['intent_category'])) {
+                    $result['intent_category'] = $keyword->intent_category;
+                }
+                if (isset($columnMap['ai_visibility_score'])) {
+                    $result['ai_visibility_score'] = $keyword->ai_visibility_score;
+                }
+                
+                return $result;
             }),
         ];
     }

@@ -1,15 +1,15 @@
 # Luminiaeo Backend
 
-Enterprise-grade Laravel backend application for SEO keyword research, citation analysis, and backlink management with microservices architecture.
+Enterprise-grade Laravel backend application for comprehensive SEO management with AI-powered keyword research, citation analysis, backlink management, and FAQ generation.
 
 ## 🏗️ Architecture Overview
 
 This application follows a **microservices architecture** with the following components:
 
-- **Laravel API** (PHP 8.2) - Main application backend
-- **Keyword Clustering Service** (Python/FastAPI) - Semantic keyword clustering using ML
-- **PBN Detector Service** (Python/FastAPI) - Private Blog Network detection
-- **MySQL 8.0** - Primary database
+- **Laravel API** (PHP 8.2) - Main application backend and API gateway
+- **Keyword Clustering Service** (Python/FastAPI) - Semantic keyword clustering using ML embeddings
+- **PBN Detector Service** (Python/FastAPI) - Private Blog Network detection with ML models
+- **MySQL 8.0** - Primary database with comprehensive indexing
 - **Redis 7** - Caching and queue management
 - **Laravel Horizon** - Queue dashboard and supervisor
 - **Nginx** - Web server and reverse proxy
@@ -52,7 +52,7 @@ Create a `.env` file with the following essential variables:
 # Application
 APP_NAME=Luminiaeo
 APP_ENV=production
-APP_KEY=
+APP_KEY=                    # Generate: php artisan key:generate
 APP_DEBUG=false
 APP_URL=http://localhost:8000
 
@@ -68,24 +68,86 @@ DB_PASSWORD=password
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=null
+REDIS_DB=0
+REDIS_URL=redis://redis:6379/0
 
 # Queue
 QUEUE_CONNECTION=redis
 
-# Services
+# DataForSEO API (Required)
+DATAFORSEO_LOGIN=your_login
+DATAFORSEO_PASSWORD=your_password
+DATAFORSEO_BASE_URL=https://api.dataforseo.com/v3
+DATAFORSEO_TIMEOUT=60
+
+# DataForSEO Limits (Configurable)
+DATAFORSEO_SEARCH_VOLUME_MAX_KEYWORDS=100
+DATAFORSEO_BACKLINKS_DEFAULT_LIMIT=100
+DATAFORSEO_BACKLINKS_MAX_LIMIT=1000
+DATAFORSEO_KEYWORDS_FOR_SITE_DEFAULT_LIMIT=100
+DATAFORSEO_KEYWORDS_FOR_SITE_MAX_LIMIT=1000
+DATAFORSEO_KEYWORD_IDEAS_DEFAULT_LIMIT=100
+DATAFORSEO_KEYWORD_IDEAS_MAX_LIMIT=1000
+DATAFORSEO_CITATION_MAX_DEPTH=100
+DATAFORSEO_CITATION_DEFAULT_DEPTH=10
+DATAFORSEO_CITATION_CHUNK_SIZE=25
+DATAFORSEO_CITATION_MAX_QUERIES=5000
+DATAFORSEO_CITATION_ENABLED=true
+DATAFORSEO_MAX_CONCURRENT_REQUESTS=5
+
+# Microservices
 KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
 KEYWORD_CLUSTERING_TIMEOUT=120
-PBN_DETECTOR_URL=http://pbn-detector:8000
+CLUSTERING_MAX_KEYWORDS=1000
 
-# API Keys (Add your keys)
-DATAFORSEO_LOGIN=
-DATAFORSEO_PASSWORD=
-SERP_API_KEY=
+PBN_DETECTOR_URL=http://pbn-detector:8000
+PBN_DETECTOR_TIMEOUT=30
+PBN_DETECTOR_SECRET=your_secret_key
+PBN_MAX_BACKLINKS=1000
+PBN_HIGH_RISK_THRESHOLD=0.75
+PBN_MEDIUM_RISK_THRESHOLD=0.5
+PBN_PARALLEL_THRESHOLD=50
+PBN_PARALLEL_WORKERS=4
+
+# LLM Services (For Citation & FAQ)
+OPENAI_API_KEY=your_openai_key
+OPENAI_API_BASE_URL=https://api.openai.com/v1
+GOOGLE_API_KEY=your_google_api_key
+
+# Citation Analysis
+CITATION_DEFAULT_QUERIES=5000
+CITATION_MAX_QUERIES_PER_TASK=5000
+CITATION_CHUNK_SIZE=25
+CITATION_OPENAI_MODEL=gpt-4o
+CITATION_GEMINI_MODEL=gemini-2.0-pro-exp-02-05
+
+# FAQ Generation
+FAQ_GENERATOR_TIMEOUT=60
+FAQ_DEFAULT_LANGUAGE=en
+FAQ_DEFAULT_LOCATION=2840
+
+# External APIs
+SERP_API_KEY=your_serp_api_key
+ALSOASKED_API_KEY=your_alsoasked_key
+WHOISXML_API_KEY=your_whoisxml_key
+SAFE_BROWSING_API_KEY=your_safe_browsing_key
+
+# Google Ads (Optional)
 GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
 GOOGLE_ADS_REFRESH_TOKEN=
 GOOGLE_ADS_DEVELOPER_TOKEN=
+GOOGLE_ADS_LOGIN_CUSTOMER_ID=
+GOOGLE_ADS_REDIRECT_URI=
+
+# Cache Lock Timeouts
+CACHE_LOCK_KEYWORD_RESEARCH_TIMEOUT=10
+CACHE_LOCK_SEARCH_VOLUME_TIMEOUT=30
+CACHE_LOCK_CITATIONS_TIMEOUT=60
+CACHE_LOCK_FAQ_TIMEOUT=120
 ```
+
+> **Note:** See `.env.example` for complete list of all environment variables with descriptions.
 
 ### First Run Setup
 
@@ -104,100 +166,56 @@ docker-compose exec app php artisan config:cache
 docker-compose exec app php artisan route:cache
 ```
 
-## 📦 Services & Components
+## 📦 Core Components
 
-### 1. Laravel Application
+### Laravel Application (Main Backend)
+- **RESTful API** with Sanctum authentication
+- **Service Layer Architecture** - Business logic separation
+- **Repository Pattern** - Data access abstraction
+- **Queue-based Processing** - Async job handling
+- **Dual Caching Strategy** - Database + Redis caching
+- **Comprehensive Indexing** - Optimized database queries
 
-**Location**: Root directory
+### Keyword Clustering Microservice
+- **Technology**: Python 3.11, FastAPI, Sentence Transformers, scikit-learn
+- **Features**: Semantic embeddings (MPNet), K-Means clustering, automatic labeling
+- **Endpoints**: `POST /cluster`, `GET /health`
+- **Caching**: Redis-based embedding cache
+- **Configurable**: Request size limits, model selection
 
-**Features**:
-- RESTful API with Sanctum authentication
-- Keyword research orchestration
-- Citation analysis
-- Backlink management
-- Queue-based job processing
-- Redis caching layer
-
-**Key Directories**:
-- `app/Http/Controllers/Api/` - API controllers
-- `app/Services/` - Business logic services
-- `app/Repositories/` - Data access layer
-- `app/Jobs/` - Queue jobs
-- `app/Models/` - Eloquent models
-
-### 2. Keyword Clustering Microservice
-
-**Location**: `keyword-clustering-service/`
-
-**Technology**: Python 3.11, FastAPI, Sentence Transformers, scikit-learn
-
-**Features**:
-- Semantic keyword embeddings using MPNet
-- K-Means clustering on embeddings
-- Automatic cluster labeling
-- Custom model training support
-
-**API Endpoints**:
-- `POST /cluster` - Cluster keywords
-- `GET /health` - Health check
-
-**Training Custom Model** (Docker-based, non-interactive):
-
-All training is done via Docker - no virtual environments or Jupyter needed:
-
-```bash
-# From project root directory
-
-# Step 1: Prepare training data from 10M dataset
-docker-compose run --rm clustering-train python prepare_dataset_for_training.py \
-    /app/data/dataset_10000000_pairs.json \
-    --output /app/data/training_pairs.json \
-    --target-pairs 2000000
-
-# Step 2: Train model (non-interactive)
-docker-compose run --rm clustering-train python train_model_complete.py \
-    /app/data/training_pairs.json \
-    --output-dir /app/models/custom-keyword-clustering
-
-# Step 3: Restart service to load new model
-docker-compose restart clustering
-```
-
-See `keyword-clustering-service/TRAINING_GUIDE.md` for complete documentation.
-
-### 3. PBN Detector Microservice
-
-**Location**: `pbn-detector/`
-
-**Technology**: Python, FastAPI
-
-**Features**:
-- Private Blog Network detection
-- Domain analysis
-- Redis caching
+### PBN Detector Microservice
+- **Technology**: Python, FastAPI, Machine Learning
+- **Features**: PBN detection, network analysis, ML-based classification
+- **Endpoints**: `POST /detect`, `GET /health`
+- **Configurable**: Risk thresholds, parallel processing, request limits
 
 ## 🗄️ Database Schema
 
 ### Key Tables
 
-- **keywords** - Keyword research data
-- **keyword_research_jobs** - Research job tracking
-- **keyword_clusters** - Clustered keyword groups
-- **keyword_cache** - Cached keyword data
-- **citation_tasks** - Citation analysis tasks
-- **backlinks** - Backlink data
+- **keyword_research_jobs** - Research job tracking with user ownership
+- **keywords** - Keyword data with clustering relationships
+- **keyword_clusters** - Semantic keyword clusters
+- **keyword_cache** - Cached search volume and keyword data
+- **citation_tasks** - Citation analysis tasks with progress tracking
+- **backlinks** - Backlink data with PBN detection results
+- **pbn_detections** - PBN detection results and risk levels
+- **seo_tasks** - SEO task tracking (backlinks, etc.)
+- **faqs** - Generated FAQ data with caching
 - **projects** - User projects
 - **users** - User accounts
 
 ### Performance Optimizations
 
-The database includes optimized indexes for:
-- Keyword searches by job, cluster, source
-- Research job queries by user and status
-- Citation task lookups
-- Backlink domain queries
+Comprehensive indexing strategy includes:
+- Composite indexes for common query patterns
+- User-based queries (user_id indexes)
+- Status-based filtering (status indexes)
+- Domain and URL lookups
+- Task tracking (task_id indexes)
+- Temporal queries (created_at, updated_at indexes)
 
-Run migrations to apply indexes:
+All indexes are applied via migrations:
 ```bash
 docker-compose exec app php artisan migrate
 ```
@@ -288,7 +306,84 @@ The application uses Redis for queue management with Laravel Horizon for monitor
 
 Access Horizon dashboard at: `http://localhost:8000/horizon`
 
-## 🎯 API Endpoints
+## 🎯 Main Features
+
+### 1. Keyword Research
+Comprehensive keyword discovery and analysis with:
+- Multi-source keyword collection (Google Keyword Planner, DataForSEO, scrapers)
+- Semantic clustering using ML embeddings
+- AI intent scoring for keyword visibility
+- Search volume, competition, and CPC data
+- Asynchronous job-based processing
+
+**Endpoints:**
+- `POST /api/keyword-research` - Create research job
+- `GET /api/keyword-research` - List jobs (paginated)
+- `GET /api/keyword-research/{id}/status` - Get job status
+- `GET /api/keyword-research/{id}/results` - Get results
+
+### 2. Search Volume Lookup
+Real-time search volume data retrieval with:
+- Batch keyword processing (up to 100 keywords per request)
+- Dual caching strategy (database + in-memory)
+- Request deduplication
+- Partial results handling
+
+**Endpoints:**
+- `POST /api/seo/keywords/search-volume` - Get search volumes for keywords
+
+### 3. Keywords for Site
+Domain-based keyword discovery with:
+- Keywords ranking for target domain
+- Historical data analysis
+- SERP information integration
+- Configurable result limits
+
+**Endpoints:**
+- `POST /api/keyword-planner/for-site` - Get keywords for domain
+- `POST /api/seo/keywords/for-site` - Alternative endpoint
+
+### 4. Citation Analysis
+AI-powered citation and competitor analysis with:
+- Automated query generation using LLM
+- Multi-provider citation checking (DataForSEO SERP analysis)
+- Competitor identification and analysis
+- Chunk-based async processing
+- Progress tracking and retry mechanisms
+
+**Endpoints:**
+- `POST /api/citations/analyze` - Analyze URL for citations
+- `GET /api/citations/status/{taskId}` - Get task status
+- `GET /api/citations/results/{taskId}` - Get results
+- `POST /api/citations/retry/{taskId}` - Retry failed queries
+
+### 5. Backlinks Analysis with PBN Detection
+Comprehensive backlink analysis with:
+- Backlink data collection from DataForSEO
+- Private Blog Network (PBN) detection using ML
+- Spam score calculation
+- Safe Browsing integration
+- WHOIS domain analysis
+- Asynchronous processing
+
+**Endpoints:**
+- `POST /api/seo/backlinks/submit` - Submit backlink analysis
+- `POST /api/seo/backlinks/results` - Get results
+- `POST /api/seo/backlinks/status` - Get task status
+- `POST /api/seo/backlinks/harmful` - Get harmful backlinks
+
+### 6. FAQ Generation
+AI-powered FAQ generation with:
+- URL or topic-based generation
+- Multi-source question collection (SERP, AlsoAsked API)
+- LLM-powered answer generation (OpenAI GPT-4o, Google Gemini)
+- SEO-optimized FAQ creation
+- Caching to avoid duplicate API calls
+
+**Endpoints:**
+- `POST /api/faq/generate` - Generate FAQs from URL or topic
+- `POST /api/faq/task` - Create FAQ generation task
+- `GET /api/faq/task/{taskId}` - Get task status
 
 ### Authentication
 
@@ -296,75 +391,56 @@ Access Horizon dashboard at: `http://localhost:8000/horizon`
 POST /api/login
 POST /api/register
 GET  /api/user (protected)
+GET  /api/health (health check)
 ```
 
-### Keyword Research
+## 🔐 Security Features
 
-```
-POST   /api/keyword-research          - Create research job
-GET    /api/keyword-research          - List jobs
-GET    /api/keyword-research/{id}/status  - Get job status
-GET    /api/keyword-research/{id}/results - Get results
-```
+### Implemented Security Measures
 
-### Citations
+1. **Authentication**: Laravel Sanctum token-based API authentication
+2. **Authorization**: Resource ownership validation (users can only access their own data)
+3. **Input Sanitization**: Automatic sanitization of URLs, domains, and user inputs
+4. **Security Headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS
+5. **Rate Limiting**: Configurable rate limits on all endpoints
+6. **SQL Injection Prevention**: Eloquent ORM with parameterized queries
+7. **XSS Protection**: Input sanitization and output escaping
+8. **Request Validation**: Comprehensive FormRequest validation classes
 
-```
-POST   /api/citations/analyze         - Analyze URL
-GET    /api/citations/status/{id}    - Get status
-GET    /api/citations/results/{id}   - Get results
-POST   /api/citations/retry/{id}    - Retry failed queries
-```
-
-### SEO Data
-
-```
-POST   /api/seo/keywords/search-volume - Get search volumes
-POST   /api/seo/backlinks/submit      - Submit backlink analysis
-POST   /api/serp/keywords             - Get SERP keyword data
-```
-
-## 🔐 Security
-
-### Best Practices Implemented
-
-1. **Authentication**: Laravel Sanctum for API tokens
-2. **Validation**: FormRequest classes with comprehensive rules
-3. **Rate Limiting**: Throttle middleware on sensitive endpoints
-4. **SQL Injection**: Eloquent ORM prevents SQL injection
-5. **XSS Protection**: Blade templating escapes output
-6. **CSRF Protection**: Enabled for web routes
-
-### Security Recommendations
+### Security Best Practices
 
 - Use strong database passwords
-- Rotate API keys regularly
+- Rotate API keys and secrets regularly
 - Enable HTTPS in production
-- Use environment variables for secrets
+- Store all secrets in environment variables (never commit to git)
 - Regularly update dependencies
+- Monitor failed authentication attempts
+- Use secure session configuration
 
-## 📈 Performance Optimization
+## 📈 Performance Features
 
 ### Caching Strategy
 
-1. **Redis Cache**: Application-level caching
-2. **Keyword Cache**: Cached keyword data with TTL
-3. **Clustering Cache**: Cached clustering results
-4. **Query Result Cache**: Cached expensive queries
+1. **Dual Caching**: Database cache (persistent) + Redis cache (in-memory)
+2. **Keyword Cache**: Cached search volume data with configurable TTL
+3. **Embedding Cache**: Redis-based caching for ML embeddings
+4. **Request Deduplication**: Prevents duplicate processing of identical requests
+5. **URL Content Cache**: Cached fetched URL content for FAQ generation
 
 ### Database Optimization
 
-- Indexes on frequently queried columns
-- Eager loading to prevent N+1 queries
-- Batch inserts for bulk operations
-- Query optimization with select specific columns
+- **Comprehensive Indexing**: Composite indexes for all common query patterns
+- **Eager Loading**: Prevents N+1 queries with relationship preloading
+- **Bulk Operations**: Batch inserts and updates for efficiency
+- **Query Optimization**: Selective column loading, query scopes
 
 ### Code Optimizations
 
-- Batch processing for large datasets
-- Queue jobs for long-running tasks
-- Lazy loading relationships
-- Database transactions for consistency
+- **Parallel Processing**: HTTP pool for concurrent API calls
+- **Async Jobs**: Queue-based processing for long-running tasks
+- **Batch Processing**: Chunk-based processing for large datasets
+- **Transaction Management**: Atomic operations with proper boundaries
+- **Pagination**: All list endpoints support pagination
 
 ## 🐳 Docker Commands
 
@@ -407,9 +483,9 @@ docker-compose logs -f queue
 
 ### Health Checks
 
-- **Laravel**: `http://localhost:8000/api/health` (if implemented)
-- **Clustering**: `http://localhost:8001/health`
-- **PBN Detector**: `http://localhost:8000/health`
+- **Laravel API**: `GET /api/health` - Checks database, cache, and Redis connectivity
+- **Keyword Clustering**: `GET http://localhost:8001/health` - Service and Redis status
+- **PBN Detector**: `GET http://localhost:8000/health` - Service health check
 
 ### Database
 
@@ -459,22 +535,25 @@ php artisan horizon
 - **Redis**: Use Redis Cluster for high availability
 - **Load Balancing**: Use Nginx/HAProxy for multiple app instances
 
-## 📚 Additional Resources
+## 📚 Documentation
 
-### Documentation
+### Technical Documentation
+
+- **`TECHNICAL_SYSTEM_FLOW.md`** - Comprehensive technical documentation covering:
+  - Complete feature flows (frontend → backend → database)
+  - API endpoints with request/response examples
+  - Service layer architecture
+  - Data access patterns
+  - External integrations
+  - Architectural audits and improvements
+  - All implemented fixes and optimizations
+
+### External Resources
 
 - [Laravel Documentation](https://laravel.com/docs)
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [Laravel Horizon](https://laravel.com/docs/horizon)
-
-### Training Data
-
-To train the clustering model with your data:
-
-1. Export keyword clusters from production
-2. Prepare training pairs using `prepare_training_data.py`
-3. Train model using `train_model.py`
-4. Deploy model to `keyword-clustering-service/models/`
+- [DataForSEO API Docs](https://docs.dataforseo.com/)
 
 ## 🤝 Contributing
 
@@ -487,14 +566,57 @@ To train the clustering model with your data:
 
 [Your License Here]
 
-## 🆘 Support
+## 🆘 Troubleshooting
 
-For issues and questions:
-- Check logs: `docker-compose logs`
-- Review documentation
+### Common Issues
+
+**Service Not Responding:**
+```bash
+# Check service health
+curl http://localhost:8000/api/health
+curl http://localhost:8001/health
+curl http://localhost:8000/health
+
+# Check logs
+docker-compose logs -f [service_name]
+```
+
+**Queue Jobs Not Processing:**
+```bash
+# Check Horizon dashboard
+http://localhost:8000/horizon
+
+# Restart queue worker
+docker-compose restart queue
+```
+
+**Database Connection Issues:**
+```bash
+# Test database connection
+docker-compose exec app php artisan tinker
+>>> DB::connection()->getPdo();
+
+# Check migrations
+docker-compose exec app php artisan migrate:status
+```
+
+### Support Resources
+
+- Check application logs: `docker-compose logs -f app`
+- Review `TECHNICAL_SYSTEM_FLOW.md` for detailed system documentation
 - Check service health endpoints
+- Verify environment variables are set correctly
 
 ---
+
+## 🎯 System Status
+
+✅ **Production Ready** - All critical improvements implemented:
+- Security enhancements (ownership validation, input sanitization, security headers)
+- Performance optimizations (indexing, parallel processing, caching, pagination)
+- Code quality improvements (dependency injection, configuration management)
+- Resilience features (circuit breakers, error handling, health checks)
+- Scalability features (pagination, batch processing, configurable limits)
 
 **Built with ❤️ using Laravel, FastAPI, and modern microservices architecture**
 

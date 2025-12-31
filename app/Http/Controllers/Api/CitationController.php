@@ -10,11 +10,12 @@ use App\Models\CitationTask;
 use App\Services\ApiResponseModifier;
 use App\Services\CitationService;
 use App\Traits\HasApiResponse;
+use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\Request;
 
 class CitationController extends Controller
 {
-    use HasApiResponse;
+    use HasApiResponse, ValidatesResourceOwnership;
 
     public function __construct(
         protected CitationService $citationService,
@@ -28,16 +29,39 @@ class CitationController extends Controller
         $validated = $request->validated();
 
         $dto = CitationRequestDTO::fromArray($validated, config('citations.default_queries', 1000));
+
+        // If LLM Mentions API is enabled, use the separate LLM Mentions flow
+        if (config('citations.dataforseo.llm_mentions_enabled', false)) {
+            $task = $this->citationService->createLLMMentionsTask($dto);
+
+            // LLM Mentions returns immediately, so return 200 instead of 202
+            $message = $task->status === CitationTask::STATUS_COMPLETED
+                ? 'LLM Mentions data retrieved successfully.'
+                : 'LLM Mentions task created. ';
+
+            return $this->responseModifier
+                ->setData([
+                    'task_id' => $task->id,
+                    'status' => $task->status,
+                    'status_url' => route('citations.status', $task->id),
+                    'results_url' => route('citations.results', $task->id),
+                ])
+                ->setMessage($message)
+                ->setResponseCode($task->status === CitationTask::STATUS_COMPLETED ? 200 : 202)
+                ->response();
+        }
+
+        // Use the standard citation flow (SERP API)
         $task = $this->citationService->createTask($dto);
 
         return $this->responseModifier
             ->setData([
                 'task_id' => $task->id,
                 'status' => $task->status,
-                'status_url' => '/api/citations/status/' . $task->id,
-                'results_url' => '/api/citations/results/' . $task->id,
+                'status_url' => route('citations.status', $task->id),
+                'results_url' => route('citations.results', $task->id),
             ])
-            ->setMessage('Queries generated and citation checks are queued. Poll /api/citations/status/' . $task->id . ' for progress, then use /api/citations/results/' . $task->id . ' when completed.')
+            ->setMessage('Queries generated and citation checks are queued. Poll ' . route('citations.status', $task->id) . ' for progress, then use ' . route('citations.results', $task->id) . ' when completed.')
             ->setResponseCode(202)
             ->response();
     }
@@ -51,6 +75,8 @@ class CitationController extends Controller
                 ->setResponseCode(404)
                 ->response();
         }
+
+        $this->validateTaskOwnership($task);
 
         return $this->responseModifier
             ->setData([
@@ -73,6 +99,8 @@ class CitationController extends Controller
                 ->setResponseCode(404)
                 ->response();
         }
+
+        $this->validateTaskOwnership($task);
 
         $results = $task->results ?? [];
         $byQuery = $results['by_query'] ?? [];
@@ -131,6 +159,8 @@ class CitationController extends Controller
                 ->setResponseCode(404)
                 ->response();
         }
+
+        $this->validateTaskOwnership($task);
 
         $queries = $task->queries ?? [];
         $byQuery = $task->results['by_query'] ?? [];

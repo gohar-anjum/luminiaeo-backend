@@ -152,10 +152,6 @@ class SemanticClusteringServiceEnhanced
         foreach ($keywords as $keywordDTO) {
             $keywordMetadata = [];
 
-            if ($keywordDTO->questionVariations) {
-                $keywordMetadata['question_variations'] = $keywordDTO->questionVariations;
-            }
-
             if ($keywordDTO->searchVolume !== null) {
                 $keywordMetadata['search_volume'] = $keywordDTO->searchVolume;
             }
@@ -254,9 +250,7 @@ class SemanticClusteringServiceEnhanced
         $questions = [];
 
         foreach ($keywords as $keyword) {
-            if ($keyword->questionVariations) {
-                $questions = array_merge($questions, $keyword->questionVariations);
-            } elseif (preg_match('/^(what|how|why|when|where|who|can|should|is|are|do|does)/i', $keyword->keyword)) {
+            if (preg_match('/^(what|how|why|when|where|who|can|should|is|are|do|does)/i', $keyword->keyword)) {
                 $questions[] = $keyword->keyword;
             }
         }

@@ -17,4 +17,5 @@ interface CitationRepositoryInterface
     public function updateCompetitorsAndMeta(CitationTask $task, array $competitors, array $meta): CitationTask;
 
     public function findCompletedByUrl(string $url, ?int $cacheDays = null): ?CitationTask;
+    public function findInProgressByUrl(string $url): ?CitationTask;
 }

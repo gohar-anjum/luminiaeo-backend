@@ -20,14 +20,13 @@ class Keyword extends Model
 
     // Note: The following columns are conditionally handled - only included if they exist in database:
     // keyword_research_job_id, keyword_cluster_id, source, ai_visibility_score, intent_category,
-    // intent_metadata, question_variations, long_tail_versions, semantic_data, language_code, geoTargetId
+    // intent_metadata, long_tail_versions, semantic_data, language_code, geoTargetId
 
     protected $casts = [
         'search_volume' => 'integer',
         'competition' => 'float',
         'cpc' => 'float',
         'ai_visibility_score' => 'float',
-        'question_variations' => 'array',
         'long_tail_versions' => 'array',
         'intent_metadata' => 'array',
         'semantic_data' => 'array',

@@ -64,13 +64,17 @@ class Handler extends ExceptionHandler
             $payload['message'] = $e->getMessage();
         }
         elseif ($e instanceof \App\Exceptions\PbnDetectorException) {
-            $status = $e->getCode() ?: 400;
+            $status = $e->getStatusCode();
             $payload['status'] = $status;
+            $payload['error_code'] = $e->getErrorCode();
             $payload['message'] = $e->getMessage();
         }
 
         else {
+            $errorId = uniqid('err_', true);
+            
             \Log::error('API Error (500)', [
+                'error_id' => $errorId,
                 'exception' => get_class($e),
                 'message' => $e->getMessage(),
                 'file' => $e->getFile(),
@@ -82,7 +86,9 @@ class Handler extends ExceptionHandler
             ]);
 
             $payload['status'] = 500;
-            $payload['message'] = 'There was some error';
+            $payload['error_code'] = 'INTERNAL_SERVER_ERROR';
+            $payload['error_id'] = $errorId;
+            $payload['message'] = config('app.debug') ? $e->getMessage() : 'An internal server error occurred. Please contact support with error ID: ' . $errorId;
             $payload['response'] = null;
         }
 

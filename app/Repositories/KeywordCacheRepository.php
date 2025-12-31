@@ -128,42 +128,145 @@ class KeywordCacheRepository implements KeywordCacheRepositoryInterface
 
     public function bulkUpdate(array $keywords): int
     {
-        $updated = 0;
+        if (empty($keywords)) {
+            return 0;
+        }
 
         try {
             DB::beginTransaction();
 
+            $now = Carbon::now();
+            $expiresAt = $now->copy()->addDays(30);
+
+            $preparedData = [];
+            $lookupKeys = [];
+            
             foreach ($keywords as $keywordData) {
                 $keyword = $keywordData['keyword'] ?? null;
-                $languageCode = $keywordData['language_code'] ?? 'en';
-                $locationCode = $keywordData['location_code'] ?? 2840;
-
                 if (!$keyword) {
                     continue;
                 }
 
-                $cache = $this->find($keyword, $languageCode, $locationCode);
+                $languageCode = $keywordData['language_code'] ?? 'en';
+                $locationCode = $keywordData['location_code'] ?? 2840;
+                
+                $preparedData[] = array_merge($keywordData, [
+                    'expires_at' => $expiresAt,
+                    'cached_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                
+                $lookupKeys[] = [
+                    'keyword' => $keyword,
+                    'language_code' => $languageCode,
+                    'location_code' => $locationCode,
+                ];
+            }
 
-                if ($cache) {
+            if (empty($preparedData)) {
+                DB::commit();
+                return 0;
+            }
 
-                    $keywordData['expires_at'] = Carbon::now()->addDays(30);
-                    $cache->update($keywordData);
-                    $updated++;
+            $existingRecords = collect();
+            if (!empty($lookupKeys)) {
+                $query = KeywordCache::query();
+                $first = true;
+                foreach ($lookupKeys as $key) {
+                    if ($first) {
+                        $query->where(function ($q) use ($key) {
+                            $q->where('keyword', $key['keyword'])
+                              ->where('language_code', $key['language_code'])
+                              ->where('location_code', $key['location_code']);
+                        });
+                        $first = false;
+                    } else {
+                        $query->orWhere(function ($q) use ($key) {
+                            $q->where('keyword', $key['keyword'])
+                              ->where('language_code', $key['language_code'])
+                              ->where('location_code', $key['location_code']);
+                        });
+                    }
+                }
+                $existingRecords = $query->get()->keyBy(function ($item) {
+                    return "{$item->keyword}:{$item->language_code}:{$item->location_code}";
+                });
+            }
+
+            $toInsert = [];
+            $toUpdate = [];
+
+            foreach ($preparedData as $data) {
+                $lookupKey = "{$data['keyword']}:{$data['language_code']}:{$data['location_code']}";
+                
+                // JSON encode array fields for direct insert (insert() doesn't use model casts)
+                if (isset($data['metadata']) && is_array($data['metadata'])) {
+                    $data['metadata'] = json_encode($data['metadata']);
+                }
+                if (isset($data['serp_features']) && is_array($data['serp_features'])) {
+                    $data['serp_features'] = json_encode($data['serp_features']);
+                }
+                if (isset($data['related_keywords']) && is_array($data['related_keywords'])) {
+                    $data['related_keywords'] = json_encode($data['related_keywords']);
+                }
+                if (isset($data['trends']) && is_array($data['trends'])) {
+                    $data['trends'] = json_encode($data['trends']);
+                }
+                if (isset($data['cluster_data']) && is_array($data['cluster_data'])) {
+                    $data['cluster_data'] = json_encode($data['cluster_data']);
+                }
+                
+                if (isset($existingRecords[$lookupKey])) {
+                    unset($data['created_at']);
+                    $toUpdate[] = [
+                        'id' => $existingRecords[$lookupKey]->id,
+                        'data' => $data,
+                    ];
                 } else {
+                    $toInsert[] = $data;
+                }
+            }
 
-                    $this->create($keywordData);
-                    $updated++;
+            if (!empty($toInsert)) {
+                KeywordCache::insert($toInsert);
+            }
+
+            if (!empty($toUpdate)) {
+                foreach (array_chunk($toUpdate, 100) as $chunk) {
+                    foreach ($chunk as $update) {
+                        $updateData = $update['data'];
+                        // JSON encode array fields for direct update
+                        if (isset($updateData['metadata']) && is_array($updateData['metadata'])) {
+                            $updateData['metadata'] = json_encode($updateData['metadata']);
+                        }
+                        if (isset($updateData['serp_features']) && is_array($updateData['serp_features'])) {
+                            $updateData['serp_features'] = json_encode($updateData['serp_features']);
+                        }
+                        if (isset($updateData['related_keywords']) && is_array($updateData['related_keywords'])) {
+                            $updateData['related_keywords'] = json_encode($updateData['related_keywords']);
+                        }
+                        if (isset($updateData['trends']) && is_array($updateData['trends'])) {
+                            $updateData['trends'] = json_encode($updateData['trends']);
+                        }
+                        if (isset($updateData['cluster_data']) && is_array($updateData['cluster_data'])) {
+                            $updateData['cluster_data'] = json_encode($updateData['cluster_data']);
+                        }
+                        KeywordCache::where('id', $update['id'])->update($updateData);
+                    }
                 }
             }
 
             DB::commit();
 
+            $total = count($toInsert) + count($toUpdate);
             Log::info('Bulk updated keyword cache entries', [
                 'total' => count($keywords),
-                'updated' => $updated,
+                'inserted' => count($toInsert),
+                'updated' => count($toUpdate),
             ]);
 
-            return $updated;
+            return $total;
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to bulk update keyword cache entries', [

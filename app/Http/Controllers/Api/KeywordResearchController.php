@@ -5,19 +5,23 @@ namespace App\Http\Controllers\Api;
 use App\DTOs\KeywordResearchRequestDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\KeywordResearchRequest;
+use App\Services\ApiResponseModifier;
 use App\Services\KeywordService;
 use App\Traits\HasApiResponse;
+use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\Request;
 
 class KeywordResearchController extends Controller
 {
-    use HasApiResponse;
+    use HasApiResponse, ValidatesResourceOwnership;
 
     protected KeywordService $keywordService;
+    protected ApiResponseModifier $responseModifier;
 
-    public function __construct(KeywordService $keywordService)
+    public function __construct(KeywordService $keywordService, ApiResponseModifier $responseModifier)
     {
         $this->keywordService = $keywordService;
+        $this->responseModifier = $responseModifier;
     }
 
     public function create(KeywordResearchRequest $request)
@@ -26,16 +30,16 @@ class KeywordResearchController extends Controller
         $dto = KeywordResearchRequestDTO::fromArray($validated);
         $job = $this->keywordService->createKeywordResearch($dto);
 
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Keyword research job created successfully',
-            'data' => [
+        return $this->responseModifier
+            ->setData([
                 'id' => $job->id,
                 'query' => $job->query,
                 'status' => $job->status,
                 'created_at' => $job->created_at,
-            ],
-        ], 201);
+            ])
+            ->setMessage('Keyword research job created successfully')
+            ->setResponseCode(201)
+            ->response();
     }
 
     public function status($id)

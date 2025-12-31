@@ -535,15 +535,8 @@ class AlsoAskedService
 
     protected function mapRegionToLocationCode(string $region): int
     {
-        $mapping = [
-            'us' => 2840,
-            'uk' => 2826,
-            'au' => 2036,
-            'ca' => 2124,
-            'nz' => 2752,
-        ];
-
-        return $mapping[strtolower($region)] ?? 2840;
+        $locationCodeService = app(LocationCodeService::class);
+        return $locationCodeService->mapRegionToLocationCode($region, 2840);
     }
 
     public function getKeywords($terms, string $language = 'en', string $region = 'us', int $depth = 2, bool $fresh = false): array

@@ -6,6 +6,7 @@ use App\DTOs\BacklinkDTO;
 use App\Exceptions\DataForSEOException;
 use App\Exceptions\PbnDetectorException;
 use App\Interfaces\DataForSEO\BacklinksRepositoryInterface;
+use App\Jobs\ProcessPbnDetectionJob;
 use App\Models\Backlink;
 use App\Models\PbnDetection;
 use App\Models\SeoTask;
@@ -35,11 +36,13 @@ class BacklinksRepository implements BacklinksRepositoryInterface
         $this->whoisLookup = $whoisLookup;
         $this->pbnDetector = $pbnDetector;
         $this->safeBrowsing = $safeBrowsing;
-        $this->backlinksLimit = (int) config('services.dataforseo.backlinks_limit', 100);
+        $this->backlinksLimit = (int) config('services.dataforseo.backlinks.max_limit', config('services.dataforseo.backlinks_limit', 1000));
     }
 
-    public function createTask(string $domain, int $limit = 100): SeoTask
+    public function createTask(string $domain, int $limit = null): SeoTask
     {
+        $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
+        $limit = $limit ?? $defaultLimit;
         $limit = min($limit, $this->backlinksLimit);
         $normalizedDomain = $this->normalizeDomain($domain);
 
@@ -63,6 +66,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             $summary = $this->service->getBacklinksSummary($normalizedDomain, $limit);
             $items = $resultSet['items'] ?? [];
 
+            // Transaction 1: Create task and store initial backlinks
             [$seoTask, $backlinks] = DB::transaction(function () use ($normalizedDomain, $limit, $resultSet, $items, $taskId) {
                 $seoTask = SeoTask::create([
                     'task_id' => $taskId,
@@ -77,8 +81,8 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                 ]);
 
                 $backlinks = $this->hydrateBacklinks($items, $normalizedDomain, $seoTask->task_id);
-                $this->enrichWithWhois($backlinks);
-                $this->enrichWithSafeBrowsing($backlinks);
+                
+                // Store initial backlinks without enrichment (faster)
                 $this->storeBacklinkDtos($backlinks, true);
 
                 PbnDetection::updateOrCreate(
@@ -93,32 +97,40 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                 return [$seoTask, $backlinks];
             });
 
-            $detectionPayload = $this->formatDetectionPayload($backlinks);
-            $detectionResponse = $this->runPbnDetection(
-                $normalizedDomain,
-                $taskId,
-                $detectionPayload,
-                $summary
-            );
-
-            if (!empty($detectionResponse)) {
-                $this->applyDetectionResults($backlinks, $detectionResponse['items'] ?? []);
+            // Transaction 2: Enrich with WHOIS and Safe Browsing (outside main transaction)
+            $this->enrichWithWhoisBatch($backlinks);
+            $this->enrichWithSafeBrowsing($backlinks);
+            
+            // Update backlinks with enrichment data
+            DB::transaction(function () use ($backlinks) {
                 $this->storeBacklinkDtos($backlinks, false);
-                $this->finalizeDetectionRecord($seoTask->task_id, 'completed', $detectionResponse);
+            });
 
-                $seoTask->markAsCompleted([
+            // Dispatch PBN detection as async job
+            $detectionPayload = $this->formatDetectionPayload($backlinks);
+            
+            Log::info('Dispatching PBN detection job', [
+                'task_id' => $taskId,
+                'domain' => $normalizedDomain,
+                'backlinks_count' => count($backlinks),
+                'payload_count' => count($detectionPayload),
+            ]);
+            
+            ProcessPbnDetectionJob::dispatch($taskId, $normalizedDomain, $detectionPayload, $summary);
+            
+            Log::info('PBN detection job dispatched successfully', [
+                'task_id' => $taskId,
+                'domain' => $normalizedDomain,
+            ]);
+
+            // Mark task as processing (PBN detection will complete it)
+            $seoTask->update([
+                'result' => [
                     'backlinks' => $resultSet,
                     'summary' => $summary,
-                    'pbn_detection' => $detectionResponse,
-                ]);
-            } else {
-                $this->finalizeDetectionRecord($seoTask->task_id, 'skipped');
-                $seoTask->markAsCompleted([
-                'backlinks' => $resultSet,
-                    'summary' => $summary,
-                    'pbn_detection' => ['status' => 'skipped'],
-                ]);
-            }
+                    'pbn_detection' => ['status' => 'processing'],
+                ],
+            ]);
 
             return $seoTask->fresh();
         } catch (PbnDetectorException $e) {
@@ -250,6 +262,11 @@ class BacklinksRepository implements BacklinksRepositoryInterface
 
     protected function enrichWithWhois(array $backlinks): void
     {
+        $this->enrichWithWhoisBatch($backlinks);
+    }
+
+    protected function enrichWithWhoisBatch(array $backlinks): void
+    {
         if (!$this->whoisLookup->enabled()) {
             return;
         }
@@ -258,16 +275,33 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             ->pluck('sourceDomain')
             ->filter()
             ->unique()
-            ->values();
+            ->values()
+            ->all();
 
+        if (empty($domains)) {
+            return;
+        }
+
+        // Batch lookup all unique domains
+        $whoisResults = [];
         foreach ($domains as $sourceDomain) {
-            $whoisRaw = $this->whoisLookup->lookup($sourceDomain);
-            $signals = $this->whoisLookup->extractSignals($whoisRaw);
+            try {
+                $whoisRaw = $this->whoisLookup->lookup($sourceDomain);
+                $signals = $this->whoisLookup->extractSignals($whoisRaw);
+                $whoisResults[$sourceDomain] = $signals;
+            } catch (\Exception $e) {
+                Log::warning('WHOIS lookup failed for domain', [
+                    'domain' => $sourceDomain,
+                    'error' => $e->getMessage(),
+                ]);
+                $whoisResults[$sourceDomain] = [];
+            }
+        }
 
-            foreach ($backlinks as $dto) {
-                if ($dto->sourceDomain === $sourceDomain) {
-                    $dto->applyWhoisSignals($signals);
-                }
+        // Apply results to backlinks
+        foreach ($backlinks as $dto) {
+            if (!empty($dto->sourceDomain) && isset($whoisResults[$dto->sourceDomain])) {
+                $dto->applyWhoisSignals($whoisResults[$dto->sourceDomain]);
             }
         }
     }
@@ -320,29 +354,79 @@ class BacklinksRepository implements BacklinksRepositoryInterface
 
     protected function runPbnDetection(string $domain, string $taskId, array $backlinks, array $summary): array
     {
-        if (!$this->pbnDetector->enabled()) {
-            return [];
-        }
-        return $this->pbnDetector->analyze($domain, $taskId, $backlinks, $summary);
+        // This method is kept for backward compatibility but PBN detection is now async
+        // The actual detection is handled by ProcessPbnDetectionJob
+        return [];
     }
 
     protected function applyDetectionResults(array $backlinks, array $results): void
     {
         if (empty($results)) {
+            Log::warning('PBN detection results are empty', [
+                'backlinks_count' => count($backlinks),
+            ]);
             return;
         }
 
         $indexed = [];
         foreach ($results as $result) {
             if (!empty($result['source_url'])) {
-                $indexed[$result['source_url']] = $result;
+                // Normalize URL for matching (remove trailing slashes, lowercase, etc.)
+                $normalizedUrl = rtrim(strtolower($result['source_url']), '/');
+                $indexed[$normalizedUrl] = $result;
             }
         }
 
+        $matchedCount = 0;
+        $unmatchedCount = 0;
+        $zeroProbabilityCount = 0;
+        
         foreach ($backlinks as $dto) {
-            if (isset($indexed[$dto->sourceUrl])) {
-                $dto->applyDetection($indexed[$dto->sourceUrl]);
+            // Normalize source URL for matching
+            $normalizedSourceUrl = rtrim(strtolower($dto->sourceUrl), '/');
+            
+            if (isset($indexed[$normalizedSourceUrl])) {
+                $result = $indexed[$normalizedSourceUrl];
+                
+                // Check if pbn_probability is missing or 0
+                if (!isset($result['pbn_probability'])) {
+                    Log::warning('PBN detection result missing pbn_probability', [
+                        'source_url' => $dto->sourceUrl,
+                        'result_keys' => array_keys($result),
+                    ]);
+                } elseif ($result['pbn_probability'] == 0) {
+                    $zeroProbabilityCount++;
+                }
+                
+                $dto->applyDetection($result);
+                $matchedCount++;
+            } else {
+                // Try exact match as fallback
+                if (isset($indexed[$dto->sourceUrl])) {
+                    $dto->applyDetection($indexed[$dto->sourceUrl]);
+                    $matchedCount++;
+                } else {
+                    $unmatchedCount++;
+                }
             }
+        }
+        
+        Log::info('PBN detection results applied', [
+            'total_backlinks' => count($backlinks),
+            'total_results' => count($results),
+            'matched' => $matchedCount,
+            'unmatched' => $unmatchedCount,
+            'zero_probability_count' => $zeroProbabilityCount,
+        ]);
+        
+        if ($unmatchedCount > 0) {
+            Log::warning('Some backlinks were not matched with PBN detection results', [
+                'unmatched_count' => $unmatchedCount,
+                'sample_unmatched' => array_slice(
+                    array_map(fn($dto) => $dto->sourceUrl, array_filter($backlinks, fn($dto) => !isset($indexed[rtrim(strtolower($dto->sourceUrl), '/')]))),
+                    0, 5
+                ),
+            ]);
         }
     }
 

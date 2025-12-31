@@ -101,9 +101,10 @@ class BacklinkDTO
 
     public function applyDetection(array $result): void
     {
-        $this->pbnProbability = isset($result['pbn_probability']) && is_numeric($result['pbn_probability'])
-            ? (float)$result['pbn_probability']
-            : $this->pbnProbability;
+        // Always update pbn_probability if it exists in the result, even if it's 0
+        if (isset($result['pbn_probability']) && is_numeric($result['pbn_probability'])) {
+            $this->pbnProbability = (float)$result['pbn_probability'];
+        }
 
         $this->riskLevel = isset($result['risk_level']) && is_string($result['risk_level'])
             ? $result['risk_level']

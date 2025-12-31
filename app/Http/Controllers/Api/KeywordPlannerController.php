@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\DataForSEOException;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\KeywordsForSitePlannerRequest;
 use App\Services\Google\KeywordPlannerService;
 use App\Services\DataForSEO\DataForSEOService;
 use App\Services\Keyword\CombinedKeywordService;
@@ -10,6 +12,7 @@ use App\Services\Keyword\SemanticClusteringService;
 use App\Services\ApiResponseModifier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
 class KeywordPlannerController extends Controller
 {
@@ -45,27 +48,21 @@ class KeywordPlannerController extends Controller
         ]);
     }
 
-    public function getKeywordsForSite(Request $request)
+    public function getKeywordsForSite(KeywordsForSitePlannerRequest $request)
     {
-        $request->validate([
-            'target' => 'required|string|max:255',
-            'location_code' => 'sometimes|integer|min:1',
-            'language_code' => 'sometimes|string|size:2',
-            'search_partners' => 'sometimes|boolean',
-            'limit' => 'sometimes|integer|min:1|max:1000',
-        ]);
+        $validated = $request->validated();
 
         try {
             $keywords = $this->dataForSEOService->getKeywordsForSite(
-                $request->input('target'),
-                $request->input('location_code', 2840),
-                $request->input('language_code', 'en'),
-                $request->input('search_partners', true),
-                null,
-                null,
-                false,
-                null,
-                $request->input('limit')
+                $validated['target'],
+                $validated['location_code'],
+                $validated['language_code'],
+                $validated['search_partners'],
+                $validated['date_from'],
+                $validated['date_to'],
+                $validated['include_serp_info'],
+                $validated['tag'],
+                $validated['limit'] ?? null
             );
 
             $data = array_map(function ($dto) {
@@ -73,7 +70,7 @@ class KeywordPlannerController extends Controller
             }, $keywords);
 
             Log::info('Keywords for site retrieved', [
-                'target' => $request->input('target'),
+                'target' => $validated['target'],
                 'count' => count($data),
             ]);
 
@@ -81,14 +78,36 @@ class KeywordPlannerController extends Controller
                 ->setData($data)
                 ->setMessage('Keywords for site retrieved successfully')
                 ->response();
-        } catch (\Exception $e) {
-            Log::error('Error getting keywords for site', [
+        } catch (InvalidArgumentException $e) {
+            Log::warning('Invalid argument for keywords for site', [
                 'error' => $e->getMessage(),
-                'target' => $request->input('target'),
+                'target' => $validated['target'] ?? null,
             ]);
 
             return $this->responseModifier
-                ->setMessage('Failed to retrieve keywords: ' . $e->getMessage())
+                ->setMessage('Invalid request: ' . $e->getMessage())
+                ->setResponseCode(422)
+                ->response();
+        } catch (DataForSEOException $e) {
+            Log::error('DataForSEO error getting keywords for site', [
+                'error' => $e->getMessage(),
+                'error_code' => $e->getCode(),
+                'target' => $validated['target'] ?? null,
+            ]);
+
+            return $this->responseModifier
+                ->setMessage('DataForSEO API error: ' . $e->getMessage())
+                ->setResponseCode($e->getStatusCode() ?? 500)
+                ->response();
+        } catch (\Exception $e) {
+            Log::error('Unexpected error getting keywords for site', [
+                'error' => $e->getMessage(),
+                'target' => $validated['target'] ?? null,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return $this->responseModifier
+                ->setMessage('An unexpected error occurred. Please try again.')
                 ->setResponseCode(500)
                 ->response();
         }

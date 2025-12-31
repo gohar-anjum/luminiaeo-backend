@@ -32,7 +32,8 @@ class CitationChunkJob implements ShouldQueue
 
     public function handle(
         CitationRepositoryInterface $repository,
-        CitationService $service
+        CitationService $service,
+        DataForSEOCitationService $dataForSEOCitationService
     ): void {
         $task = $repository->find($this->taskId);
 
@@ -54,7 +55,6 @@ class CitationChunkJob implements ShouldQueue
         $results = [];
 
         try {
-            $dataForSEOCitationService = app(DataForSEOCitationService::class);
             $dataForSEOResults = $dataForSEOCitationService->batchFindCitations($this->chunk, $task->url);
 
             foreach ($this->chunk as $index => $query) {

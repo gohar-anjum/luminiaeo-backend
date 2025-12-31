@@ -7,112 +7,92 @@ use App\Interfaces\KeywordRepositoryInterface;
 use App\Jobs\ProcessKeywordResearchJob;
 use App\Models\KeywordResearchJob as KeywordResearchJobModel;
 use App\Services\Keyword\KeywordResearchOrchestratorService;
+use App\Services\KeywordResearchJobRepository;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Schema;
 
 class KeywordService
 {
     protected KeywordRepositoryInterface $keywordRepository;
     protected ApiResponseModifier $response;
     protected KeywordResearchOrchestratorService $orchestrator;
+    protected KeywordResearchJobRepository $jobRepository;
 
     public function __construct(
         KeywordRepositoryInterface $keywordRepository,
         ApiResponseModifier $response,
-        KeywordResearchOrchestratorService $orchestrator
+        KeywordResearchOrchestratorService $orchestrator,
+        KeywordResearchJobRepository $jobRepository
     ) {
         $this->keywordRepository = $keywordRepository;
         $this->response = $response;
         $this->orchestrator = $orchestrator;
+        $this->jobRepository = $jobRepository;
     }
 
     public function createKeywordResearch(KeywordResearchRequestDTO $dto): KeywordResearchJobModel
     {
-        // Get available columns from database
-        $columns = [];
-        try {
-            $columns = Schema::getColumnListing('keyword_research_jobs');
-        } catch (\Exception $e) {
-            // If we can't get columns, use basic structure
-        }
+        $userId = Auth::id();
+        
+        // Check for duplicate job (request deduplication)
+        $lockKey = 'keyword_research:lock:' . md5($userId . ':' . $dto->query);
+        $timeout = config('cache_locks.keyword_research.timeout', 10);
+        
+        return Cache::lock($lockKey, $timeout)->get(function () use ($userId, $dto) {
+            // Check again after acquiring lock
+            $duplicate = $this->jobRepository->findRecentDuplicate($userId, $dto->query, 5);
+            if ($duplicate) {
+                Log::info('Duplicate keyword research job detected, returning existing job', [
+                    'existing_job_id' => $duplicate->id,
+                    'user_id' => $userId,
+                    'query' => $dto->query,
+                ]);
+                return $duplicate;
+            }
 
-        // Start with only the columns that definitely exist
-        $data = [
-            'user_id' => Auth::id(),
-            'query' => $dto->query,
-            'status' => KeywordResearchJobModel::STATUS_PENDING,
-        ];
+            $baseData = [
+                'user_id' => $userId,
+                'query' => $dto->query,
+                'status' => KeywordResearchJobModel::STATUS_PENDING,
+            ];
 
-        // Only include optional columns if they exist in the database
-        if (!empty($columns)) {
-            if (in_array('project_id', $columns) && $dto->projectId !== null) {
-                $data['project_id'] = $dto->projectId;
-            }
-            
-            if (in_array('language_code', $columns) && $dto->languageCode !== null) {
-                $data['language_code'] = $dto->languageCode;
-            }
-            
-            if (in_array('geoTargetId', $columns) && $dto->geoTargetId !== null) {
-                $data['geoTargetId'] = $dto->geoTargetId;
-            }
-            
-            if (in_array('settings', $columns)) {
-                $data['settings'] = [
+            $optionalData = [
+                'project_id' => $dto->projectId,
+                'language_code' => $dto->languageCode,
+                'geoTargetId' => $dto->geoTargetId,
+                'settings' => [
                     'max_keywords' => $dto->maxKeywords,
                     'enable_google_planner' => $dto->enableGooglePlanner,
                     'enable_scraper' => $dto->enableScraper,
                     'enable_clustering' => $dto->enableClustering,
                     'enable_intent_scoring' => $dto->enableIntentScoring,
-                ];
-            }
-            
-            if (in_array('progress', $columns)) {
-                $data['progress'] = [
+                ],
+                'progress' => [
                     'queued' => [
                         'percentage' => 0,
                         'timestamp' => now()->toIso8601String(),
                     ],
-                ];
-            }
-        }
+                ],
+            ];
 
-        $job = KeywordResearchJobModel::create($data);
+            $job = $this->jobRepository->createWithOptionalFields($baseData, $optionalData);
 
-        ProcessKeywordResearchJob::dispatch($job->id);
+            ProcessKeywordResearchJob::dispatch($job->id);
 
-        Log::info('Keyword research job created', [
-            'job_id' => $job->id,
-            'user_id' => Auth::id(),
-            'query' => $dto->query,
-        ]);
+            Log::info('Keyword research job created', [
+                'job_id' => $job->id,
+                'user_id' => $userId,
+                'query' => $dto->query,
+            ]);
 
-        return $job;
+            return $job;
+        });
     }
 
     public function getKeywordResearchStatus(int $jobId)
     {
-        // Check if relationship columns exist before eager loading
-        $withRelations = [];
-        try {
-            $keywordColumns = Schema::getColumnListing('keywords');
-            $clusterColumns = Schema::getColumnListing('keyword_clusters');
-            
-            if (in_array('keyword_research_job_id', $keywordColumns)) {
-                $withRelations[] = 'keywords';
-            }
-            
-            if (in_array('keyword_research_job_id', $clusterColumns)) {
-                $withRelations[] = 'clusters';
-            }
-        } catch (\Exception $e) {
-            // If we can't check, don't load relationships
-        }
-        
-        $job = !empty($withRelations) 
-            ? KeywordResearchJobModel::with($withRelations)->findOrFail($jobId)
-            : KeywordResearchJobModel::findOrFail($jobId);
+        $job = KeywordResearchJobModel::with(['keywords'/*, 'clusters'*/])->findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();
@@ -133,31 +113,7 @@ class KeywordService
 
     public function getKeywordResearchResults(int $jobId)
     {
-        // Check if relationship columns exist before eager loading
-        $withRelations = [];
-        try {
-            $keywordColumns = Schema::getColumnListing('keywords');
-            $clusterColumns = Schema::getColumnListing('keyword_clusters');
-            
-            if (in_array('keyword_research_job_id', $keywordColumns)) {
-                // Check if keywords table has cluster relationship
-                if (in_array('keyword_cluster_id', $keywordColumns)) {
-                    $withRelations[] = 'keywords.cluster';
-                } else {
-                    $withRelations[] = 'keywords';
-                }
-            }
-            
-            if (in_array('keyword_research_job_id', $clusterColumns)) {
-                $withRelations[] = 'clusters';
-            }
-        } catch (\Exception $e) {
-            // If we can't check, don't load relationships
-        }
-        
-        $job = !empty($withRelations) 
-            ? KeywordResearchJobModel::with($withRelations)->findOrFail($jobId)
-            : KeywordResearchJobModel::findOrFail($jobId);
+        $job = KeywordResearchJobModel::with(['keywords'/*, 'keywords.cluster', 'clusters'*/])->findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();
@@ -173,12 +129,12 @@ class KeywordService
         return $this->response->setData($job->result ?? [])->response();
     }
 
-    public function listKeywordResearchJobs()
+    public function listKeywordResearchJobs(int $perPage = 15)
     {
         $jobs = KeywordResearchJobModel::where('user_id', Auth::id())
             ->orderBy('created_at', 'desc')
-            ->get()
-            ->map(function ($job) {
+            ->paginate($perPage)
+            ->through(function ($job) {
                 return [
                     'id' => $job->id,
                     'query' => $job->query,

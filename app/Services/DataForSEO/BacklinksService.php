@@ -19,7 +19,7 @@ class BacklinksService
         $this->baseUrl = config('services.dataforseo.base_url');
         $this->login = config('services.dataforseo.login');
         $this->password = config('services.dataforseo.password');
-        $this->summaryLimit = (int) config('services.dataforseo.summary_limit', 100);
+        $this->summaryLimit = (int) config('services.dataforseo.backlinks.summary_limit', config('services.dataforseo.summary_limit', 100));
 
         if (empty($this->baseUrl) || empty($this->login) || empty($this->password)) {
             throw new DataForSEOException('DataForSEO configuration is incomplete', 500, 'CONFIG_ERROR');
@@ -35,13 +35,19 @@ class BacklinksService
             ->retry(3, 100);
     }
 
-    public function submitBacklinksTask(string $domain, int $limit = 100): array
+    public function submitBacklinksTask(string $domain, int $limit = null): array
     {
         if (empty($domain)) {
             throw new \InvalidArgumentException('Domain cannot be empty');
         }
-        if ($limit < 1 || $limit > 1000) {
-            throw new \InvalidArgumentException('Limit must be between 1 and 1000');
+        
+        $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
+        $maxLimit = config('services.dataforseo.backlinks.max_limit', 1000);
+        
+        $limit = $limit ?? $defaultLimit;
+        
+        if ($limit < 1 || $limit > $maxLimit) {
+            throw new \InvalidArgumentException("Limit must be between 1 and {$maxLimit}");
         }
 
         $domain = $this->normalizeDomain($domain);

@@ -24,7 +24,9 @@ class KeywordResearchRequest extends FormRequest
             'project_id' => [
                 'nullable',
                 'integer',
-                'exists:projects,id',
+                Rule::exists('projects', 'id')->where(function ($query) {
+                    return $query->where('user_id', $this->user()->id);
+                }),
             ],
             'language_code' => [
                 'nullable',

@@ -4,10 +4,16 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CitationTask extends Model
 {
     use HasFactory;
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\User::class);
+    }
 
     public const STATUS_PENDING = 'pending';
     public const STATUS_GENERATING = 'generating';
@@ -17,6 +23,7 @@ class CitationTask extends Model
     public const STATUS_FAILED = 'failed';
 
     protected $fillable = [
+        'user_id',
         'url',
         'status',
         'queries',

@@ -23,7 +23,6 @@ class KeywordFactory extends Factory
             'intent' => null,
             'intent_category' => null,
             'intent_metadata' => null,
-            'question_variations' => null,
             'long_tail_versions' => null,
             'semantic_data' => null,
             'location' => null,

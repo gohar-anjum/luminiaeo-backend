@@ -21,7 +21,16 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Redis extension
-RUN pecl install redis && docker-php-ext-enable redis
+# Install Redis extension
+RUN apt-get update && apt-get install -y \
+    $PHPIZE_DEPS \
+    unzip \
+    tar \
+    gzip \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install netcat for health checks
 RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*

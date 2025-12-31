@@ -4,6 +4,7 @@ namespace App\Services\Serp;
 
 use App\DTOs\SerpKeywordDataDTO;
 use App\Exceptions\SerpException;
+use App\Services\LocationCodeService;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -291,18 +292,7 @@ class SerpService
 
     protected function mapLocationCode(int $locationCode): string
     {
-
-        $map = [
-            2840 => 'us',
-            2826 => 'uk',
-            2276 => 'ca',
-            2036 => 'au',
-            2250 => 'de',
-            2254 => 'fr',
-            2226 => 'es',
-            2228 => 'it',
-        ];
-
-        return $map[$locationCode] ?? 'us';
+        $locationCodeService = app(LocationCodeService::class);
+        return $locationCodeService->mapLocationCodeToRegion($locationCode, 'us');
     }
 }

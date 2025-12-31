@@ -109,6 +109,20 @@ class CitationRepository implements CitationRepositoryInterface
         return $query->first();
     }
 
+    public function findInProgressByUrl(string $url): ?CitationTask
+    {
+        $normalizedUrl = $this->normalizeUrl($url);
+
+        return CitationTask::where('url', $normalizedUrl)
+            ->whereIn('status', [
+                CitationTask::STATUS_GENERATING,
+                CitationTask::STATUS_QUEUED,
+                CitationTask::STATUS_PROCESSING,
+            ])
+            ->orderBy('created_at', 'desc')
+            ->first();
+    }
+
     protected function normalizeUrl(string $url): string
     {
         $url = trim($url);

@@ -77,4 +77,16 @@ return [
 
     'prefix' => env('CACHE_PREFIX', Str::slug((string) env('APP_NAME', 'laravel')).'-cache-'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Location Codes Cache TTL
+    |--------------------------------------------------------------------------
+    |
+    | Cache time-to-live for location codes in seconds.
+    | Default: 86400 (24 hours)
+    |
+    */
+
+    'location_codes_ttl' => env('LOCATION_CODES_CACHE_TTL', 86400),
+
 ];

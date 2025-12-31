@@ -21,6 +21,11 @@ mkdir -p /var/www/html/bootstrap/cache
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
+echo "Removing cached configuration files..."
+rm -f /var/www/html/bootstrap/cache/config.php
+rm -f /var/www/html/bootstrap/cache/routes.php
+rm -f /var/www/html/bootstrap/cache/services.php
+
 # Auto-generate APP_KEY if missing or empty
 if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
   echo "APP_KEY is missing. Generating application key..."
@@ -28,9 +33,11 @@ if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
   echo "Application key generated successfully!"
 fi
 
-# Clear caches before any operations
-php artisan config:clear
-php artisan cache:clear
+echo "Clearing configuration cache..."
+php artisan config:clear 2>&1 || echo "Config clear completed (warnings ignored)"
+
+echo "Clearing application cache..."
+php artisan cache:clear 2>&1 || echo "Warning: Cache clear failed, continuing..."
 
 # Run migrations if RUN_MIGRATIONS is set to true, or auto-detect if needed
 if [ "$RUN_MIGRATIONS" = "true" ]; then

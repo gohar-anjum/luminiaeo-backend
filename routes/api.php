@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\CitationController;
 use App\Http\Controllers\Api\DataForSEO\BacklinksController;
 use App\Http\Controllers\Api\DataForSEO\DataForSEOController;
 use App\Http\Controllers\Api\KeywordPlannerController;
+use App\Http\Controllers\Api\LocationCodeController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -15,6 +16,15 @@ Route::get('/login', function () {
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
+
+Route::get('/health', [\App\Http\Controllers\Api\HealthController::class, 'check'])->name('health.check');
+
+// Location codes API (public - no auth required for reading)
+Route::prefix('location-codes')->group(function () {
+    Route::get('/', [LocationCodeController::class, 'index'])->name('location-codes.index');
+    Route::get('/countries', [LocationCodeController::class, 'countries'])->name('location-codes.countries');
+    Route::get('/{locationCode}', [LocationCodeController::class, 'show'])->name('location-codes.show');
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
@@ -28,14 +38,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/retry/{taskId}', [CitationController::class, 'retry'])->name('citations.retry');
     });
 
-    Route::prefix('keyword-research')->group(function () {
+    Route::prefix('keyword-research')->middleware('throttle:10,1')->group(function () {
         Route::post('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'create'])->name('keyword-research.create');
         Route::get('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'index'])->name('keyword-research.index');
         Route::get('/{id}/status', [\App\Http\Controllers\Api\KeywordResearchController::class, 'status'])->name('keyword-research.status');
         Route::get('/{id}/results', [\App\Http\Controllers\Api\KeywordResearchController::class, 'results'])->name('keyword-research.results');
     });
 
-    Route::prefix('keyword-planner')->group(function () {
+    Route::prefix('keyword-planner')->middleware('throttle:20,1')->group(function () {
 
         Route::get('/ideas', [KeywordPlannerController::class, 'getKeywordIdeas'])
             ->name('keyword-planner.ideas');

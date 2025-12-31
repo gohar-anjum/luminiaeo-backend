@@ -11,6 +11,7 @@ use App\Services\LLM\Prompt\PromptLoader;
 use App\Services\LLM\Support\JsonExtractor;
 use App\Services\Serp\SerpService;
 use App\Services\FAQ\AlsoAskedService;
+use App\Services\LocationCodeService;
 use App\Exceptions\SerpException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
@@ -51,48 +52,65 @@ class FaqGeneratorService
         $url = $isUrl ? $this->normalizeUrl($input) : null;
         $topic = $isUrl ? null : $input;
 
-        $sourceHash = $this->generateSourceHash($url, $topic, $options);
+        $lockKey = 'faq:lock:' . md5(serialize([$url, $topic, $options]));
+        $timeout = config('cache_locks.faq.timeout', 120);
+        
+        return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options) {
+            $sourceHash = $this->generateSourceHash($url, $topic, $options);
 
-        $faqRecord = $this->faqRepository->findByHash($sourceHash);
-        if ($faqRecord) {
-            $this->faqRepository->incrementApiCallsSaved($faqRecord->id);
-            $faqRecord->refresh();
+            $faqRecord = $this->faqRepository->findByHash($sourceHash);
+            if ($faqRecord) {
+                $this->faqRepository->incrementApiCallsSaved($faqRecord->id);
+                $faqRecord->refresh();
 
-            return new FaqResponseDTO(
-                faqs: $faqRecord->faqs,
-                count: count($faqRecord->faqs),
-                url: $faqRecord->url,
-                topic: $faqRecord->topic,
-                fromDatabase: true,
-                apiCallsSaved: $faqRecord->api_calls_saved,
-                createdAt: $faqRecord->created_at?->toIso8601String(),
-            );
-        }
+                return new FaqResponseDTO(
+                    faqs: $faqRecord->faqs,
+                    count: count($faqRecord->faqs),
+                    url: $faqRecord->url,
+                    topic: $faqRecord->topic,
+                    fromDatabase: true,
+                    apiCallsSaved: $faqRecord->api_calls_saved,
+                    createdAt: $faqRecord->created_at?->toIso8601String(),
+                );
+            }
 
-        $cacheKey = $this->getCacheKey($url, $topic, $options);
+            $cacheKey = $this->getCacheKey($url, $topic, $options);
 
-        if (Cache::has($cacheKey)) {
-            $faqs = Cache::get($cacheKey);
-            $faqRecord = $this->storeFaqsInDatabase($url, $topic, $faqs, $options, $sourceHash);
+            if (Cache::has($cacheKey)) {
+                $faqs = Cache::get($cacheKey);
+                $faqRecord = $this->storeFaqsInDatabase($url, $topic, $faqs, $options, $sourceHash);
 
-            return new FaqResponseDTO(
-                faqs: $faqs,
-                count: count($faqs),
-                url: $url,
-                topic: $topic,
-                fromDatabase: false,
-                apiCallsSaved: 0,
-                createdAt: $faqRecord->created_at?->toIso8601String(),
-            );
-        }
+                return new FaqResponseDTO(
+                    faqs: $faqs,
+                    count: count($faqs),
+                    url: $url,
+                    topic: $topic,
+                    fromDatabase: false,
+                    apiCallsSaved: 0,
+                    createdAt: $faqRecord->created_at?->toIso8601String(),
+                );
+            }
 
+            return $this->generateFaqsInternal($url, $topic, $options, $sourceHash, $cacheKey);
+        });
+    }
+    
+    protected function generateFaqsInternal(string $url, ?string $topic, array $options, string $sourceHash, string $cacheKey): FaqResponseDTO
+    {
         $urlContent = null;
         if ($url) {
-            $urlContent = $this->fetchUrlContent($url);
+            $urlContentCacheKey = 'faq:url_content:' . md5($url);
+            $urlContent = Cache::remember($urlContentCacheKey, 3600, function () use ($url) {
+                return $this->fetchUrlContent($url);
+            });
         }
 
-        $serpQuestions = $this->fetchSerpQuestions($url, $topic);
-        $alsoAskedQuestions = $this->fetchAlsoAskedQuestions($url, $topic);
+        $languageCode = $options['language_code'] ?? config('services.faq.default_language', 'en');
+        $locationCode = $options['location_code'] ?? config('services.faq.default_location', 2840);
+        $region = $this->mapLocationCodeToRegion($locationCode);
+
+        $serpQuestions = $this->fetchSerpQuestions($url, $topic, $languageCode, $locationCode);
+        $alsoAskedQuestions = $this->fetchAlsoAskedQuestions($url, $topic, $languageCode, $region);
 
         $allQuestions = $this->combineQuestions($serpQuestions, $alsoAskedQuestions);
 
@@ -102,34 +120,71 @@ class FaqGeneratorService
             );
         }
 
-        // Try Gemini first, then GPT, then SERP fallback
         $faqs = null;
         $lastException = null;
 
-        // Try Gemini
-        try {
-            $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options);
-        } catch (\Exception $geminiException) {
-            $lastException = $geminiException;
-
-            // Try GPT fallback
+        if ($this->shouldTryLLM('gemini')) {
             try {
-                $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
-            } catch (\Exception $gptException) {
-                $lastException = $gptException;
+                $faqs = $this->generateFaqsWithGemini($url, $topic, $urlContent, $allQuestions, $options);
+                $this->recordLLMSuccess('gemini');
+            } catch (\Exception $geminiException) {
+                $lastException = $geminiException;
+                $this->recordLLMFailure('gemini');
 
-                // Final fallback to SERP response
-                $serpResponse = $this->fetchSerpResponse($url, $topic);
+                if ($this->shouldTryLLM('gpt')) {
+                    try {
+                        $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
+                        $this->recordLLMSuccess('gpt');
+                    } catch (\Exception $gptException) {
+                        $lastException = $gptException;
+                        $this->recordLLMFailure('gpt');
 
-                if ($serpResponse && !empty($serpResponse)) {
-                    $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+                        $serpResponse = $this->fetchSerpResponse($url, $topic);
 
-                    if (empty($faqs)) {
-                        throw new \RuntimeException('Failed to generate FAQs from SERP response: No FAQs extracted');
+                        if ($serpResponse && !empty($serpResponse)) {
+                            $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+
+                            if (empty($faqs)) {
+                                throw new \RuntimeException('Failed to generate FAQs from SERP response: No FAQs extracted');
+                            }
+                        } else {
+                            // If all fallbacks fail, throw the last exception
+                            throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                        }
                     }
                 } else {
-                    // If all fallbacks fail, throw the last exception
-                    throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                    // Circuit breaker open for GPT, try SERP fallback directly
+                    $serpResponse = $this->fetchSerpResponse($url, $topic);
+                    if ($serpResponse && !empty($serpResponse)) {
+                        $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+                    } else {
+                        throw new \RuntimeException('LLM circuit breaker open and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                    }
+                }
+            }
+        } else {
+            // Circuit breaker open for Gemini, try GPT or SERP
+            if ($this->shouldTryLLM('gpt')) {
+                try {
+                    $faqs = $this->generateFaqsWithGPT($url, $topic, $urlContent, $allQuestions, $options);
+                    $this->recordLLMSuccess('gpt');
+                } catch (\Exception $gptException) {
+                    $lastException = $gptException;
+                    $this->recordLLMFailure('gpt');
+                    $serpResponse = $this->fetchSerpResponse($url, $topic);
+                    if ($serpResponse && !empty($serpResponse)) {
+                        $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+                    } else {
+                        throw new \RuntimeException('All LLM APIs circuit breaker open. Last error: ' . $gptException->getMessage());
+                    }
+                }
+            } else {
+                // Both circuit breakers open, use SERP fallback
+                $serpResponse = $this->fetchSerpResponse($url, $topic);
+                if ($serpResponse && !empty($serpResponse)) {
+                    $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
+                } else {
+                    throw new \RuntimeException('All LLM APIs circuit breaker open and SERP fallback unavailable.');
                 }
             }
         }
@@ -184,7 +239,7 @@ class FaqGeneratorService
         return $text;
     }
 
-    protected function fetchSerpQuestions(?string $url, ?string $topic): array
+    protected function fetchSerpQuestions(?string $url, ?string $topic, string $languageCode = 'en', int $locationCode = 2840): array
     {
         try {
             if (!$this->isSerpServiceAvailable()) {
@@ -201,8 +256,8 @@ class FaqGeneratorService
 
             $serpResults = $serpService->getSerpResults(
                 $searchQuery,
-                'en',
-                2840
+                $languageCode,
+                $locationCode
             );
 
             $questions = $this->extractPeopleAlsoAskQuestions($serpResults);
@@ -226,7 +281,17 @@ class FaqGeneratorService
     protected function getSerpService(): SerpService
     {
         if ($this->serpService === null) {
-            $this->serpService = app(SerpService::class);
+            try {
+                $this->serpService = app(SerpService::class);
+            } catch (\Exception $e) {
+                // If SerpService can't be instantiated (e.g., missing API key),
+                // throw a more descriptive exception
+                throw new \RuntimeException(
+                    'SERP service is not available. Please configure SERP_API_BASE_URL and SERP_API_KEY in your .env file.',
+                    0,
+                    $e
+                );
+            }
         }
 
         return $this->serpService;
@@ -421,7 +486,7 @@ class FaqGeneratorService
         }
     }
 
-    protected function fetchAlsoAskedQuestions(?string $url, ?string $topic): array
+    protected function fetchAlsoAskedQuestions(?string $url, ?string $topic, string $languageCode = 'en', string $region = 'us'): array
     {
         try {
             $alsoAskedService = $this->getAlsoAskedService();
@@ -438,8 +503,8 @@ class FaqGeneratorService
 
             $questions = $alsoAskedService->search(
                 $searchQuery,
-                'en',
-                'us',
+                $languageCode,
+                $region,
                 2,
                 false
             );
@@ -992,45 +1057,113 @@ class FaqGeneratorService
         $url = $isUrl ? $this->normalizeUrl($input) : null;
         $topic = $isUrl ? null : $input;
 
-        $serpQuestions = $this->fetchSerpQuestions($url, $topic);
+        // Request deduplication - check for in-progress tasks
+        $lockKey = 'faq:task:lock:' . md5(serialize([$url, $topic, $options]));
+        $timeout = config('cache_locks.faq.timeout', 120);
         
-        if (empty($serpQuestions)) {
-            throw new \RuntimeException('No questions found from SERP. Please ensure SERP service is configured.');
-        }
-
-        $alsoAskedService = $this->getAlsoAskedService();
-        $alsoAskedSearchId = null;
-
-        if ($alsoAskedService->isAvailable()) {
-            $searchQuery = $this->buildSearchQuery($url, $topic);
+        return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options) {
+            // Check for existing in-progress task
+            $existingTask = \App\Models\FaqTask::where('url', $url)
+                ->where('topic', $topic)
+                ->whereIn('status', ['pending', 'processing'])
+                ->orderBy('created_at', 'desc')
+                ->first();
             
-            if (!empty($searchQuery)) {
-                $termsArray = [$searchQuery];
-                $alsoAskedSearchId = $alsoAskedService->createAsyncSearchJob(
-                    $termsArray,
-                    'en',
-                    'us',
-                    2
-                );
+            if ($existingTask) {
+                return $existingTask;
             }
+
+            $serpQuestions = $this->fetchSerpQuestions($url, $topic);
+            
+            if (empty($serpQuestions)) {
+                throw new \RuntimeException('No questions found from SERP. Please ensure SERP service is configured.');
+            }
+
+            $alsoAskedService = $this->getAlsoAskedService();
+            $alsoAskedSearchId = null;
+
+            if ($alsoAskedService->isAvailable()) {
+                $searchQuery = $this->buildSearchQuery($url, $topic);
+                
+                if (!empty($searchQuery)) {
+                    $termsArray = [$searchQuery];
+                    $alsoAskedSearchId = $alsoAskedService->createAsyncSearchJob(
+                        $termsArray,
+                        'en',
+                        'us',
+                        2
+                    );
+                }
+            }
+
+            $task = \App\Models\FaqTask::create([
+                'user_id' => Auth::id(),
+                'url' => $url,
+                'topic' => $topic,
+                'serp_questions' => $serpQuestions,
+                'alsoasked_search_id' => $alsoAskedSearchId,
+                'options' => $options,
+                'status' => $alsoAskedSearchId ? 'pending' : 'processing',
+            ]);
+
+            if ($alsoAskedSearchId) {
+                \App\Jobs\ProcessFaqTask::dispatch($task->id)->delay(now()->addSeconds(2));
+            } else {
+                \App\Jobs\ProcessFaqTask::dispatch($task->id);
+            }
+
+            return $task;
+        });
+    }
+
+    /**
+     * Map location code to region string for AlsoAsked API
+     */
+    protected function mapLocationCodeToRegion(int $locationCode): string
+    {
+        $locationCodeService = app(LocationCodeService::class);
+        return $locationCodeService->mapLocationCodeToRegion($locationCode, 'us');
+    }
+
+    /**
+     * Check if LLM service should be tried (circuit breaker)
+     */
+    protected function shouldTryLLM(string $provider): bool
+    {
+        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
+        $failureCount = Cache::get($circuitBreakerKey . ':failures', 0);
+        $lastFailure = Cache::get($circuitBreakerKey . ':last_failure');
+
+        // Circuit breaker opens after 5 consecutive failures
+        if ($failureCount >= 5) {
+            // Check if we should try again (after 10 minutes)
+            if ($lastFailure && now()->diffInMinutes($lastFailure) < 10) {
+                return false;
+            }
+            // Reset after cooldown period
+            Cache::forget($circuitBreakerKey . ':failures');
         }
 
-        $task = \App\Models\FaqTask::create([
-            'user_id' => Auth::id(),
-            'url' => $url,
-            'topic' => $topic,
-            'serp_questions' => $serpQuestions,
-            'alsoasked_search_id' => $alsoAskedSearchId,
-            'options' => $options,
-            'status' => $alsoAskedSearchId ? 'pending' : 'processing',
-        ]);
+        return true;
+    }
 
-        if ($alsoAskedSearchId) {
-            \App\Jobs\ProcessFaqTask::dispatch($task->id)->delay(now()->addSeconds(2));
-        } else {
-            \App\Jobs\ProcessFaqTask::dispatch($task->id);
-        }
+    /**
+     * Record LLM success (reset circuit breaker)
+     */
+    protected function recordLLMSuccess(string $provider): void
+    {
+        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
+        Cache::forget($circuitBreakerKey . ':failures');
+        Cache::forget($circuitBreakerKey . ':last_failure');
+    }
 
-        return $task;
+    /**
+     * Record LLM failure (increment circuit breaker)
+     */
+    protected function recordLLMFailure(string $provider): void
+    {
+        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
+        $failures = Cache::increment($circuitBreakerKey . ':failures', 1);
+        Cache::put($circuitBreakerKey . ':last_failure', now(), 600); // 10 minutes
     }
 }
