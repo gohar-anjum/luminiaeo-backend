@@ -18,7 +18,7 @@ class PbnDetectorServiceTest extends TestCase
         parent::setUp();
 
         config([
-            'services.pbn_detector.url' => 'http://pbn-detector:8000',
+            'services.pbn_detector.url' => 'http://pbn-detector:8081',
         ]);
 
         $this->service = new PbnDetectorService();
@@ -27,7 +27,7 @@ class PbnDetectorServiceTest extends TestCase
     public function test_detect_pbn_returns_prediction(): void
     {
         Http::fake([
-            'pbn-detector:8000/detect' => Http::response([
+            'pbn-detector:8081/detect' => Http::response([
                 'is_pbn' => false,
                 'confidence' => 0.85,
                 'score' => 0.15,
@@ -46,7 +46,7 @@ class PbnDetectorServiceTest extends TestCase
     public function test_detect_pbn_handles_service_unavailable(): void
     {
         Http::fake([
-            'pbn-detector:8000/*' => Http::response([], 500),
+            'pbn-detector:8081/*' => Http::response([], 500),
         ]);
 
         $result = $this->service->detectPbn([

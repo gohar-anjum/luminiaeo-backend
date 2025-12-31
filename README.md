@@ -100,7 +100,7 @@ KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
 KEYWORD_CLUSTERING_TIMEOUT=120
 CLUSTERING_MAX_KEYWORDS=1000
 
-PBN_DETECTOR_URL=http://pbn-detector:8000
+PBN_DETECTOR_URL=http://pbn-detector:8081
 PBN_DETECTOR_TIMEOUT=30
 PBN_DETECTOR_SECRET=your_secret_key
 PBN_MAX_BACKLINKS=1000
@@ -485,7 +485,7 @@ docker-compose logs -f queue
 
 - **Laravel API**: `GET /api/health` - Checks database, cache, and Redis connectivity
 - **Keyword Clustering**: `GET http://localhost:8001/health` - Service and Redis status
-- **PBN Detector**: `GET http://localhost:8000/health` - Service health check
+- **PBN Detector**: `GET http://localhost:8002/health` (internal: `http://pbn-detector:8081/health`) - Service health check
 
 ### Database
 

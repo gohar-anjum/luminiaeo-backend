@@ -21,18 +21,33 @@ class DataForSEOService
 
     public function __construct(KeywordCacheRepositoryInterface $cacheRepository)
     {
-        $this->baseUrl = config('services.dataforseo.base_url');
-        $this->login = config('services.dataforseo.login');
-        $this->password = config('services.dataforseo.password');
+        // Initialize with empty strings to avoid type errors during autoload
+        // Validation will happen when service is actually used
+        $this->baseUrl = '';
+        $this->login = '';
+        $this->password = '';
         $this->cacheTTL = config('services.dataforseo.cache_ttl', 86400);
         $this->cacheRepository = $cacheRepository;
+    }
 
+    protected function ensureConfigured(): void
+    {
         if (empty($this->baseUrl) || empty($this->login) || empty($this->password)) {
-            throw new DataForSEOException(
-                'DataForSEO configuration is incomplete. Please check your environment variables.',
-                500,
-                'CONFIG_ERROR'
-            );
+            $baseUrl = config('services.dataforseo.base_url');
+            $login = config('services.dataforseo.login');
+            $password = config('services.dataforseo.password');
+
+            if (empty($baseUrl) || empty($login) || empty($password)) {
+                throw new DataForSEOException(
+                    'DataForSEO configuration is incomplete. Please check your environment variables.',
+                    500,
+                    'CONFIG_ERROR'
+                );
+            }
+
+            $this->baseUrl = (string) $baseUrl;
+            $this->login = (string) $login;
+            $this->password = (string) $password;
         }
     }
 
@@ -85,6 +100,7 @@ class DataForSEOService
 
     protected function client()
     {
+        $this->ensureConfigured();
         return Http::withBasicAuth($this->login, $this->password)
             ->acceptJson()
             ->baseUrl($this->baseUrl)

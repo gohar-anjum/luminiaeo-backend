@@ -67,7 +67,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       # Override service URLs to use Docker service names
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
-      - PBN_DETECTOR_URL=http://pbn-detector:8000
+      - PBN_DETECTOR_URL=http://pbn-detector:8081
 
   # Nginx Web Server
   nginx:
@@ -116,7 +116,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       # Override service URLs to use Docker service names
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
-      - PBN_DETECTOR_URL=http://pbn-detector:8000
+      - PBN_DETECTOR_URL=http://pbn-detector:8081
 
   # Laravel Horizon (Queue Dashboard & Supervisor)
   horizon:
@@ -148,7 +148,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_URL=redis://redis:6379/0
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
-      - PBN_DETECTOR_URL=http://pbn-detector:8000
+      - PBN_DETECTOR_URL=http://pbn-detector:8081
 
   # Keyword Clustering Service (Python)
   clustering:
@@ -203,7 +203,7 @@ services:
     container_name: luminiaeo_pbn_detector
     restart: unless-stopped
     ports:
-      - "${PBN_DETECTOR_PORT:-8002}:8000"
+      - "${PBN_DETECTOR_PORT:-8002}:8081"
     networks:
       - luminiaeo-network
     env_file:
@@ -215,7 +215,7 @@ services:
     depends_on:
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
