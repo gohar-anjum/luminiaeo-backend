@@ -74,10 +74,6 @@ class SerpService
         ]);
 
         if (Cache::has($cacheKey)) {
-            Log::info('Cache hit for Serp keyword data', [
-                'keywords_count' => count($keywords),
-                'cache_key' => $cacheKey,
-            ]);
             return Cache::get($cacheKey);
         }
 
@@ -89,12 +85,6 @@ class SerpService
         ];
 
         try {
-            Log::info('Fetching keyword data from Serp API', [
-                'keywords_count' => count($keywords),
-                'language_code' => $languageCode,
-                'location_code' => $locationCode,
-            ]);
-
             $response = $this->client()
                 ->post($this->baseUrl . '/keywords', $payload)
                 ->throw()
@@ -127,11 +117,6 @@ class SerpService
             }, $response['data']);
 
             Cache::put($cacheKey, $results, now()->addSeconds($this->cacheTTL));
-
-            Log::info('Successfully fetched Serp keyword data', [
-                'keywords_count' => count($keywords),
-                'results_count' => count($results),
-            ]);
 
             return $results;
         } catch (RequestException $e) {
@@ -178,10 +163,6 @@ class SerpService
         ]);
 
         if (Cache::has($cacheKey)) {
-            Log::info('Cache hit for Serp results', [
-                'keyword' => $keyword,
-                'cache_key' => $cacheKey,
-            ]);
             return Cache::get($cacheKey);
         }
 
@@ -194,36 +175,10 @@ class SerpService
         ];
 
         try {
-            Log::info('Fetching SERP results from Serp API', [
-                'keyword' => $keyword,
-                'language_code' => $languageCode,
-                'location_code' => $locationCode,
-                'base_url' => $this->baseUrl,
-                'endpoint' => $this->baseUrl . '/search',
-                'payload' => $payload,
-            ]);
-
             $httpResponse = $this->client()
                 ->get($this->baseUrl . '/search', $payload);
 
-            Log::info('SERP API HTTP Response Received', [
-                'status_code' => $httpResponse->status(),
-                'successful' => $httpResponse->successful(),
-                'body_preview' => mb_substr($httpResponse->body(), 0, 500),
-            ]);
-
             $response = $httpResponse->json();
-
-            Log::info('SERP API Response', [
-                'status_code' => $httpResponse->status(),
-                'keyword' => $keyword,
-                'response_keys' => is_array($response) ? array_keys($response) : [],
-                'has_error' => isset($response['error']),
-                'has_people_also_ask' => isset($response['people_also_ask']),
-                'has_related_questions' => isset($response['related_questions']),
-                'has_organic_results' => isset($response['organic_results']),
-                'full_response' => $response,
-            ]);
 
             if (!$httpResponse->successful()) {
                 $errorMessage = $response['error']['message'] ?? 'HTTP request failed';
@@ -254,13 +209,6 @@ class SerpService
             }
 
             Cache::put($cacheKey, $response, now()->addSeconds($this->cacheTTL));
-
-            Log::info('SERP API Success', [
-                'keyword' => $keyword,
-                'people_also_ask_count' => isset($response['people_also_ask']) ? count($response['people_also_ask']) : 0,
-                'related_questions_count' => isset($response['related_questions']) ? count($response['related_questions']) : 0,
-                'organic_results_count' => isset($response['organic_results']) ? count($response['organic_results']) : 0,
-            ]);
 
             return $response;
         } catch (RequestException $e) {

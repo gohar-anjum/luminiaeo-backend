@@ -38,30 +38,16 @@ class SerpController extends Controller
                 return $dto->toArray();
             }, $results);
 
-            Log::info('Serp keyword data request completed', [
-                'keywords_count' => count($validated['keywords']),
-                'results_count' => count($data),
-            ]);
-
             return $this->responseModifier
                 ->setData($data)
                 ->setMessage('Serp keyword data retrieved successfully')
                 ->response();
         } catch (InvalidArgumentException $e) {
-            Log::warning('Invalid request for Serp keyword data', [
-                'error' => $e->getMessage(),
-            ]);
-
             return $this->responseModifier
                 ->setMessage($e->getMessage())
                 ->setResponseCode(422)
                 ->response();
         } catch (SerpException $e) {
-            Log::error('Serp API error in keyword data', [
-                'error' => $e->getMessage(),
-                'error_code' => $e->getErrorCode(),
-                'status_code' => $e->getStatusCode(),
-            ]);
 
             return $this->responseModifier
                 ->setMessage($e->getMessage())
@@ -89,29 +75,16 @@ class SerpController extends Controller
                 $validated['options'] ?? []
             );
 
-            Log::info('Serp results request completed', [
-                'keyword' => $validated['keywords'][0],
-            ]);
-
             return $this->responseModifier
                 ->setData($results)
                 ->setMessage('Serp results retrieved successfully')
                 ->response();
         } catch (InvalidArgumentException $e) {
-            Log::warning('Invalid request for Serp results', [
-                'error' => $e->getMessage(),
-            ]);
-
             return $this->responseModifier
                 ->setMessage($e->getMessage())
                 ->setResponseCode(422)
                 ->response();
         } catch (SerpException $e) {
-            Log::error('Serp API error in results', [
-                'error' => $e->getMessage(),
-                'error_code' => $e->getErrorCode(),
-                'status_code' => $e->getStatusCode(),
-            ]);
 
             return $this->responseModifier
                 ->setMessage($e->getMessage())

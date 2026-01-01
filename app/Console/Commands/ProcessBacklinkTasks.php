@@ -251,34 +251,34 @@ class ProcessBacklinkTasks extends Command
             ]
         );
 
-        // Process synchronously - complete the full cycle
-        try {
-            $task->markAsProcessing();
-            
+            // Process synchronously - complete the full cycle
             try {
-                Log::info('Processing PBN detection synchronously', [
-                    'task_id' => $task->task_id,
-                    'domain' => $task->domain,
-                    'backlinks_count' => count($backlinkDtos),
-                ]);
-            } catch (\Exception $logError) {
-                // Silently ignore logging errors
-            }
+                $task->markAsProcessing();
+                
+                try {
+                    Log::info('Processing PBN detection synchronously', [
+                        'task_id' => $task->task_id,
+                        'domain' => $task->domain,
+                        'backlinks_count' => count($backlinkDtos),
+                    ]);
+                } catch (\Exception $logError) {
+                    // Silently ignore logging errors
+                }
 
-            // Check if PBN service is enabled
-            if (!$this->pbnDetector->enabled()) {
-                throw new PbnDetectorException('PBN detector service is not enabled', 503, 'SERVICE_NOT_CONFIGURED');
-            }
+                // Check if PBN service is enabled
+                if (!$this->pbnDetector->enabled()) {
+                    throw new PbnDetectorException('PBN detector service is not enabled', 503, 'SERVICE_NOT_CONFIGURED');
+                }
 
-            // PBN microservice has a limit of 10 backlinks per request
-            // Split into batches and process sequentially
-            $maxBacklinksPerRequest = (int) env('PBN_MAX_BACKLINKS', 10);
-            $allDetectionItems = [];
-            $allSummaries = [];
-            
-            $batches = array_chunk($detectionPayload, $maxBacklinksPerRequest);
-            
-            Log::info('[PBN Batch] Starting batch processing for PBN detection', [
+                // PBN microservice has a limit of 10 backlinks per request
+                // Split into batches and process sequentially
+                $maxBacklinksPerRequest = (int) env('PBN_MAX_BACKLINKS', 10);
+                $allDetectionItems = [];
+                $allSummaries = [];
+                
+                $batches = array_chunk($detectionPayload, $maxBacklinksPerRequest);
+                
+                Log::info('[PBN Batch] Starting batch processing for PBN detection', [
                     'task_id' => $task->task_id,
                     'domain' => $task->domain,
                     'total_backlinks' => count($detectionPayload),
@@ -698,7 +698,7 @@ class ProcessBacklinkTasks extends Command
                 $task->markAsFailed($e->getMessage());
                 
                 throw $e;
-            }
+        }
     }
 
     /**

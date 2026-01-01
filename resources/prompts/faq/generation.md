@@ -36,10 +36,13 @@ Return ONLY a valid JSON array in this exact format:
 [
   {
     "question": "Exact question text from the provided list",
-    "answer": "Comprehensive answer here (150-300 words)..."
+    "answer": "Comprehensive answer here (150-300 words)...",
+    "keywords": ["keyword1", "keyword2", "keyword3"]
   },
   ...
 ]
+
+**IMPORTANT:** The "keywords" field must contain an array of keywords (from the provided SEO KEYWORDS list above) that you used in your answer. List only the keywords that appear in the answer.
 
 **REMEMBER: You are answering questions, not creating them. Use the questions provided in the "QUESTIONS TO ANSWER" section.**
 

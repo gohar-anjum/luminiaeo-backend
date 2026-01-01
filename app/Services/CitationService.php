@@ -32,21 +32,11 @@ class CitationService
             $existingTask = $this->repository->findCompletedByUrl($normalizedUrl, $cacheDays);
 
             if ($existingTask) {
-                Log::info('Returning cached citation task', [
-                    'task_id' => $existingTask->id,
-                    'url' => $normalizedUrl,
-                    'cached_at' => $existingTask->created_at,
-                ]);
                 return $existingTask;
             }
 
             $inProgressTask = $this->repository->findInProgressByUrl($normalizedUrl);
             if ($inProgressTask) {
-                Log::info('Returning existing in-progress citation task', [
-                    'task_id' => $inProgressTask->id,
-                    'url' => $normalizedUrl,
-                    'status' => $inProgressTask->status,
-                ]);
                 return $inProgressTask;
             }
 
@@ -64,12 +54,6 @@ class CitationService
             ]);
 
             GenerateCitationQueriesJob::dispatch($task->id, $normalizedUrl, $numQueries);
-
-            Log::info('Citation task created, query generation queued', [
-                'task_id' => $task->id,
-                'url' => $normalizedUrl,
-                'num_queries' => $numQueries,
-            ]);
 
             return $task->fresh();
         });
@@ -190,11 +174,6 @@ class CitationService
 
     public function recordFailure(CitationTask $task, string $message): CitationTask
     {
-        Log::error('Citation task failed', [
-            'task_id' => $task->id,
-            'error' => $message,
-        ]);
-
         $meta = $task->meta ?? [];
         $errors = $meta['errors'] ?? [];
         $errors[] = [
@@ -213,12 +192,6 @@ class CitationService
     {
         $targetDomainNormalized = $this->normalizeDomainForGrouping($targetUrl);
         $targetDomainVariations = $this->getDomainVariations($targetUrl);
-
-        Log::debug('Computing competitors', [
-            'target_url' => $targetUrl,
-            'target_normalized' => $targetDomainNormalized,
-            'target_variations' => $targetDomainVariations,
-        ]);
 
         $competitorData = [];
         $totalQueries = count($byQuery);

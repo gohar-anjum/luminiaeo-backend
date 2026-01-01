@@ -108,52 +108,32 @@ class ProcessFaqTask implements ShouldQueue
             // This happens as soon as AlsoAsked response is received
             $task->update(['serp_questions' => $allQuestions]);
 
-            // Fetch keywords for each question using DataForSEO
             $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
             $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
-            $keywordsPerQuestion = $task->options['keywords_per_question'] ?? 10;
 
-            $questionKeywords = [];
+            $topKeywords = [];
             $hasValidKeywords = false;
             
-            // Check if we have valid keywords (not just empty arrays)
             if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
-                // Check if keywords are actually populated (not all empty arrays)
-                $totalKeywords = 0;
-                foreach ($task->question_keywords as $question => $keywords) {
-                    if (is_array($keywords) && !empty($keywords)) {
-                        $totalKeywords += count($keywords);
-                    }
-                }
-                
-                // If we have keywords for at least some questions, use them
-                if ($totalKeywords > 0) {
-                    $questionKeywords = $task->question_keywords;
+                if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords']) && !empty($task->question_keywords['top_keywords'])) {
+                    $topKeywords = $task->question_keywords['top_keywords'];
                     $hasValidKeywords = true;
                 }
             }
             
-            // If no valid keywords, fetch them
             if (!$hasValidKeywords) {
                 try {
-                    // Fetch keywords for questions
-                    $questionKeywords = $faqGeneratorService->fetchKeywordsForQuestions(
-                        $allQuestions,
+                    $topKeywords = $faqGeneratorService->fetchKeywordsForTopic(
+                        $task->topic,
                         $languageCode,
-                        $locationCode,
-                        $keywordsPerQuestion
+                        $locationCode
                     );
                     
-                    // Store keywords in task for future reference (even if empty, to avoid retrying)
-                    $task->update(['question_keywords' => $questionKeywords]);
+                    if (!empty($topKeywords)) {
+                        $task->update(['question_keywords' => ['top_keywords' => $topKeywords]]);
+                    }
                 } catch (\Exception $keywordException) {
-                    // Log the error but continue without keywords
-                    \Illuminate\Support\Facades\Log::error('Failed to fetch keywords for FAQ questions', [
-                        'task_id' => $task->id,
-                        'error' => $keywordException->getMessage(),
-                    ]);
-                    // Continue with empty keywords - answers will still be generated
-                    $questionKeywords = [];
+                    $topKeywords = [];
                 }
             }
 
@@ -174,7 +154,7 @@ class ProcessFaqTask implements ShouldQueue
                     $urlContent,
                     $allQuestions,
                     $task->options ?? [],
-                    $questionKeywords
+                    $topKeywords
                 );
             } catch (\Exception $geminiException) {
                 $lastException = $geminiException;
@@ -187,7 +167,7 @@ class ProcessFaqTask implements ShouldQueue
                         $urlContent,
                         $allQuestions,
                         $task->options ?? [],
-                        $questionKeywords
+                        $topKeywords
                     );
                 } catch (\Exception $gptException) {
                     $lastException = $gptException;

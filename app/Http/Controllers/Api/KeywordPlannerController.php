@@ -69,20 +69,11 @@ class KeywordPlannerController extends Controller
                 return $dto->toArray();
             }, $keywords);
 
-            Log::info('Keywords for site retrieved', [
-                'target' => $validated['target'],
-                'count' => count($data),
-            ]);
-
             return $this->responseModifier
                 ->setData($data)
                 ->setMessage('Keywords for site retrieved successfully')
                 ->response();
         } catch (InvalidArgumentException $e) {
-            Log::warning('Invalid argument for keywords for site', [
-                'error' => $e->getMessage(),
-                'target' => $validated['target'] ?? null,
-            ]);
 
             return $this->responseModifier
                 ->setMessage('Invalid request: ' . $e->getMessage())
@@ -159,12 +150,6 @@ class KeywordPlannerController extends Controller
                 $data['keyword_cluster_map'] = $clusteringResult['keyword_cluster_map'];
                 $data['clusters_count'] = count($clusteringResult['clusters']);
             }
-
-            Log::info('Combined keywords with clusters retrieved', [
-                'target' => $request->input('target'),
-                'keywords_count' => count($keywords),
-                'clusters_count' => $data['clusters_count'] ?? 0,
-            ]);
 
             return $this->responseModifier
                 ->setData($data)

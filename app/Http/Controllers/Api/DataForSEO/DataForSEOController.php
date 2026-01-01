@@ -38,19 +38,11 @@ class DataForSEOController extends Controller
                 return $dto->toArray();
             }, $results);
 
-            Log::info('Search volume request completed', [
-                'keywords_count' => count($validated['keywords']),
-                'results_count' => count($data),
-            ]);
-
             return $this->responseModifier
                 ->setData($data)
                 ->setMessage('Search volume data retrieved successfully')
                 ->response();
         } catch (InvalidArgumentException $e) {
-            Log::warning('Invalid request for search volume', [
-                'error' => $e->getMessage(),
-            ]);
 
             return $this->responseModifier
                 ->setMessage($e->getMessage())
@@ -100,19 +92,11 @@ class DataForSEOController extends Controller
                 return $dto->toArray();
             }, $results);
 
-            Log::info('Keywords for site request completed', [
-                'target' => $validated['target'],
-                'results_count' => count($data),
-            ]);
-
             return $this->responseModifier
                 ->setData($data)
                 ->setMessage('Keywords for site retrieved successfully')
                 ->response();
         } catch (InvalidArgumentException $e) {
-            Log::warning('Invalid request for keywords for site', [
-                'error' => $e->getMessage(),
-            ]);
 
             return $this->responseModifier
                 ->setMessage($e->getMessage())

@@ -16,19 +16,14 @@ class PasswordResetMail extends Mailable
     public string $email;
     public string $resetUrl;
 
-    /**
-     * Create a new message instance.
-     */
     public function __construct(string $token, string $email)
     {
         $this->token = $token;
         $this->email = $email;
-        $this->resetUrl = config('app.frontend_url', config('app.url')) . '/reset-password?token=' . $this->token . '&email=' . urlencode($this->email);
+        $frontendUrl = env('FRONTEND_URL', env('APP_URL', 'http://localhost:5173'));
+        $this->resetUrl = rtrim($frontendUrl, '/') . '/reset-password?token=' . $this->token . '&email=' . urlencode($this->email);
     }
 
-    /**
-     * Get the message envelope.
-     */
     public function envelope(): Envelope
     {
         return new Envelope(
@@ -36,9 +31,6 @@ class PasswordResetMail extends Mailable
         );
     }
 
-    /**
-     * Get the message content definition.
-     */
     public function content(): Content
     {
         return new Content(
@@ -51,11 +43,6 @@ class PasswordResetMail extends Mailable
         );
     }
 
-    /**
-     * Get the attachments for the message.
-     *
-     * @return array<int, \Illuminate\Mail\Mailables\Attachment>
-     */
     public function attachments(): array
     {
         return [];

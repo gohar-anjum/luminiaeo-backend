@@ -164,11 +164,11 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                     'summary' => $summary,
                     'pbn_detection' => $detectionResponse,
                 ]);
-
+            
                 Log::info('PBN detection completed synchronously and task marked as completed', [
-                    'task_id' => $taskId,
-                    'domain' => $normalizedDomain,
-                ]);
+                'task_id' => $taskId,
+                'domain' => $normalizedDomain,
+            ]);
             } catch (PbnDetectorException $e) {
                 Log::error('PBN detection failed during synchronous processing', [
                     'task_id' => $taskId,
@@ -209,7 +209,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                 Log::warning('Task completed without PBN detection due to error', [
                     'task_id' => $taskId,
                     'domain' => $normalizedDomain,
-                ]);
+            ]);
             }
 
             return $seoTask->fresh();

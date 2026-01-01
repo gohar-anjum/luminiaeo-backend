@@ -59,16 +59,13 @@ class AuthController extends Controller
             $user = User::where('email', $email)->first();
 
             if (!$user) {
-                // Return success even if user doesn't exist (security best practice)
                 return $this->responseModifier
                     ->setMessage('If that email address exists in our system, we have sent a password reset link.')
                     ->response();
             }
 
-            // Generate token
             $token = Str::random(64);
 
-            // Store token in password_reset_tokens table
             DB::table('password_reset_tokens')->updateOrInsert(
                 ['email' => $email],
                 [
@@ -77,18 +74,12 @@ class AuthController extends Controller
                 ]
             );
 
-            // Send email
             Mail::to($user->email)->send(new PasswordResetMail($token, $user->email));
 
             return $this->responseModifier
                 ->setMessage('If that email address exists in our system, we have sent a password reset link.')
                 ->response();
         } catch (\Exception $e) {
-            Log::error('Failed to send password reset email', [
-                'email' => $request->email,
-                'error' => $e->getMessage(),
-            ]);
-
             return $this->responseModifier
                 ->setMessage('Unable to send password reset email. Please try again later.')
                 ->setResponseCode(500)
@@ -104,7 +95,6 @@ class AuthController extends Controller
             $token = $validated['token'];
             $password = $validated['password'];
 
-            // Check if token exists and is valid
             $passwordReset = DB::table('password_reset_tokens')
                 ->where('email', $email)
                 ->first();
@@ -116,7 +106,6 @@ class AuthController extends Controller
                     ->response();
             }
 
-            // Check if token is expired (60 minutes)
             if (now()->diffInMinutes($passwordReset->created_at) > 60) {
                 DB::table('password_reset_tokens')->where('email', $email)->delete();
                 return $this->responseModifier
@@ -125,7 +114,6 @@ class AuthController extends Controller
                     ->response();
             }
 
-            // Verify token
             if (!Hash::check($token, $passwordReset->token)) {
                 return $this->responseModifier
                     ->setMessage('Invalid reset token.')
@@ -133,7 +121,6 @@ class AuthController extends Controller
                     ->response();
             }
 
-            // Update user password
             $user = User::where('email', $email)->first();
             if (!$user) {
                 return $this->responseModifier
@@ -146,21 +133,13 @@ class AuthController extends Controller
                 'password' => Hash::make($password),
             ]);
 
-            // Delete the reset token
             DB::table('password_reset_tokens')->where('email', $email)->delete();
-
-            // Revoke all existing tokens (optional - for security)
             $user->tokens()->delete();
 
             return $this->responseModifier
                 ->setMessage('Password has been reset successfully. You can now login with your new password.')
                 ->response();
         } catch (\Exception $e) {
-            Log::error('Failed to reset password', [
-                'email' => $request->email,
-                'error' => $e->getMessage(),
-            ]);
-
             return $this->responseModifier
                 ->setMessage('Unable to reset password. Please try again later.')
                 ->setResponseCode(500)

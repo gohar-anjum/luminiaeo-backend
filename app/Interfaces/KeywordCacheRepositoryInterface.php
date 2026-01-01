@@ -17,4 +17,5 @@ interface KeywordCacheRepositoryInterface
     public function bulkCreate(array $keywords): int;
     public function bulkUpdate(array $keywords): int;
     public function getExpiringSoon(int $days = 7): Collection;
+    public function findByTopic(string $topic, string $languageCode = 'en', int $locationCode = 2840): Collection;
 }
