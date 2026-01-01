@@ -6,7 +6,6 @@ use App\DTOs\BacklinkDTO;
 use App\Exceptions\DataForSEOException;
 use App\Exceptions\PbnDetectorException;
 use App\Interfaces\DataForSEO\BacklinksRepositoryInterface;
-use App\Jobs\ProcessPbnDetectionJob;
 use App\Models\Backlink;
 use App\Models\PbnDetection;
 use App\Models\SeoTask;
@@ -106,31 +105,112 @@ class BacklinksRepository implements BacklinksRepositoryInterface
                 $this->storeBacklinkDtos($backlinks, false);
             });
 
-            // Dispatch PBN detection as async job
-            $detectionPayload = $this->formatDetectionPayload($backlinks);
-            
-            Log::info('Dispatching PBN detection job', [
+            // Process PBN detection synchronously
+            Log::info('Processing PBN detection synchronously', [
                 'task_id' => $taskId,
                 'domain' => $normalizedDomain,
                 'backlinks_count' => count($backlinks),
-                'payload_count' => count($detectionPayload),
-            ]);
-            
-            ProcessPbnDetectionJob::dispatch($taskId, $normalizedDomain, $detectionPayload, $summary);
-            
-            Log::info('PBN detection job dispatched successfully', [
-                'task_id' => $taskId,
-                'domain' => $normalizedDomain,
             ]);
 
-            // Mark task as processing (PBN detection will complete it)
-            $seoTask->update([
-                'result' => [
+            try {
+                $detectionResponse = $this->processPbnDetectionSynchronously(
+                    $taskId,
+                    $normalizedDomain,
+                    $backlinks,
+                    $summary
+                );
+
+                // Fetch backlinks from database after processing to get PBN data
+                $updatedBacklinkModels = Backlink::where('task_id', $taskId)
+                    ->orderBy('source_url')
+                    ->get();
+
+                // Format backlinks for result with PBN data
+                $formattedBacklinks = [];
+                foreach ($updatedBacklinkModels as $backlink) {
+                    $formattedBacklinks[] = [
+                        'source_url' => $backlink->source_url,
+                        'source_domain' => $backlink->source_domain,
+                        'anchor' => $backlink->anchor,
+                        'link_type' => $backlink->link_type,
+                        'domain_rank' => $backlink->domain_rank,
+                        'ip' => $backlink->ip,
+                        'asn' => $backlink->asn,
+                        'hosting_provider' => $backlink->hosting_provider,
+                        'whois_registrar' => $backlink->whois_registrar,
+                        'domain_age_days' => $backlink->domain_age_days,
+                        'content_fingerprint' => $backlink->content_fingerprint,
+                        'pbn_probability' => $backlink->pbn_probability !== null ? (float)$backlink->pbn_probability : null,
+                        'risk_level' => $backlink->risk_level,
+                        'pbn_reasons' => is_string($backlink->pbn_reasons) ? json_decode($backlink->pbn_reasons, true) : $backlink->pbn_reasons,
+                        'pbn_signals' => is_string($backlink->pbn_signals) ? json_decode($backlink->pbn_signals, true) : $backlink->pbn_signals,
+                        'safe_browsing_status' => $backlink->safe_browsing_status,
+                        'safe_browsing_threats' => is_string($backlink->safe_browsing_threats) ? json_decode($backlink->safe_browsing_threats, true) : $backlink->safe_browsing_threats,
+                        'backlink_spam_score' => $backlink->backlink_spam_score,
+                        'first_seen' => $backlink->first_seen?->toIso8601String(),
+                        'last_seen' => $backlink->last_seen?->toIso8601String(),
+                        'dofollow' => $backlink->link_type === 'dofollow',
+                        'links_count' => $backlink->links_count ?? 1,
+                    ];
+                }
+
+                // Update result set with formatted backlinks
+                $resultSet['items'] = $formattedBacklinks;
+                $resultSet['total'] = count($formattedBacklinks);
+
+                // Mark task as completed with full results including PBN data
+                $seoTask->markAsCompleted([
                     'backlinks' => $resultSet,
                     'summary' => $summary,
-                    'pbn_detection' => ['status' => 'processing'],
-                ],
-            ]);
+                    'pbn_detection' => $detectionResponse,
+                ]);
+
+                Log::info('PBN detection completed synchronously and task marked as completed', [
+                    'task_id' => $taskId,
+                    'domain' => $normalizedDomain,
+                ]);
+            } catch (PbnDetectorException $e) {
+                Log::error('PBN detection failed during synchronous processing', [
+                    'task_id' => $taskId,
+                    'domain' => $normalizedDomain,
+                    'error' => $e->getMessage(),
+                ]);
+                
+                // Still mark task as completed but with failed PBN detection
+                $resultSet['items'] = array_map(function ($backlink) {
+                    return [
+                        'source_url' => $backlink['source_url'] ?? null,
+                        'source_domain' => $backlink['source_domain'] ?? null,
+                        'anchor' => $backlink['anchor'] ?? null,
+                        'link_type' => $backlink['link_type'] ?? null,
+                        'domain_rank' => $backlink['domain_rank'] ?? null,
+                        'ip' => $backlink['ip'] ?? null,
+                        'asn' => $backlink['asn'] ?? null,
+                        'hosting_provider' => $backlink['hosting_provider'] ?? null,
+                        'whois_registrar' => $backlink['whois_registrar'] ?? null,
+                        'domain_age_days' => $backlink['domain_age_days'] ?? null,
+                        'content_fingerprint' => $backlink['content_fingerprint'] ?? null,
+                        'safe_browsing_status' => $backlink['safe_browsing_status'] ?? null,
+                        'backlink_spam_score' => $backlink['backlink_spam_score'] ?? null,
+                        'first_seen' => $backlink['first_seen'] ?? null,
+                        'last_seen' => $backlink['last_seen'] ?? null,
+                        'dofollow' => $backlink['dofollow'] ?? false,
+                        'links_count' => $backlink['links_count'] ?? 1,
+                    ];
+                }, $resultSet['items'] ?? []);
+                
+                $seoTask->markAsCompleted([
+                    'backlinks' => $resultSet,
+                    'summary' => $summary,
+                    'pbn_detection' => ['status' => 'failed', 'error' => $e->getMessage()],
+                ]);
+                
+                // Don't throw - task is completed, just without PBN data
+                Log::warning('Task completed without PBN detection due to error', [
+                    'task_id' => $taskId,
+                    'domain' => $normalizedDomain,
+                ]);
+            }
 
             return $seoTask->fresh();
         } catch (PbnDetectorException $e) {
@@ -354,9 +434,155 @@ class BacklinksRepository implements BacklinksRepositoryInterface
 
     protected function runPbnDetection(string $domain, string $taskId, array $backlinks, array $summary): array
     {
-        // This method is kept for backward compatibility but PBN detection is now async
-        // The actual detection is handled by ProcessPbnDetectionJob
+        // This method is kept for backward compatibility but PBN detection is now synchronous
+        // The actual detection is handled by processPbnDetectionSynchronously
         return [];
+    }
+
+    /**
+     * Process PBN detection synchronously
+     */
+    protected function processPbnDetectionSynchronously(
+        string $taskId,
+        string $domain,
+        array $backlinkDtos,
+        array $summary
+    ): array {
+        Log::info('Processing PBN detection synchronously', [
+            'task_id' => $taskId,
+            'domain' => $domain,
+            'backlinks_count' => count($backlinkDtos),
+        ]);
+
+        // Check if PBN service is enabled
+        if (!$this->pbnDetector->enabled()) {
+            throw new PbnDetectorException('PBN detector service is not enabled', 503, 'SERVICE_NOT_CONFIGURED');
+        }
+
+        // Format detection payload
+        $detectionPayload = $this->formatDetectionPayload($backlinkDtos);
+
+        // PBN microservice has a limit of 10 backlinks per request
+        // Split into batches and process sequentially
+        $maxBacklinksPerRequest = (int) env('PBN_MAX_BACKLINKS', 10);
+        $allDetectionItems = [];
+        $allSummaries = [];
+        
+        $batches = array_chunk($detectionPayload, $maxBacklinksPerRequest);
+        
+        Log::info('[PBN Batch] Starting batch processing for PBN detection', [
+            'task_id' => $taskId,
+            'domain' => $domain,
+            'total_backlinks' => count($detectionPayload),
+            'batch_size' => $maxBacklinksPerRequest,
+            'number_of_batches' => count($batches),
+        ]);
+
+        foreach ($batches as $batchIndex => $batch) {
+            $batchTaskId = $taskId . '_batch_' . ($batchIndex + 1);
+            
+            Log::info('[PBN Batch] Processing batch', [
+                'task_id' => $taskId,
+                'batch_task_id' => $batchTaskId,
+                'batch_number' => $batchIndex + 1,
+                'total_batches' => count($batches),
+                'batch_size' => count($batch),
+            ]);
+
+            try {
+                // Call PBN microservice for this batch
+                $batchResponse = $this->pbnDetector->analyze(
+                    $domain,
+                    $batchTaskId,
+                    $batch,
+                    $summary
+                );
+
+                if (!empty($batchResponse)) {
+                    // Collect items from this batch
+                    if (isset($batchResponse['items']) && is_array($batchResponse['items'])) {
+                        $allDetectionItems = array_merge($allDetectionItems, $batchResponse['items']);
+                    }
+                    
+                    // Collect summary data (merge if multiple batches)
+                    if (isset($batchResponse['summary'])) {
+                        $allSummaries[] = $batchResponse['summary'];
+                    }
+                }
+            } catch (PbnDetectorException $e) {
+                Log::warning('[PBN Batch] Batch processing failed - continuing with other batches', [
+                    'task_id' => $taskId,
+                    'batch_task_id' => $batchTaskId,
+                    'batch_number' => $batchIndex + 1,
+                    'error_message' => $e->getMessage(),
+                ]);
+                // Continue with next batch instead of failing completely
+                continue;
+            }
+        }
+
+        // Combine all batch results
+        $detectionResponse = [
+            'items' => $allDetectionItems,
+            'summary' => $this->mergeBatchSummaries($allSummaries),
+        ];
+
+        if (empty($allDetectionItems)) {
+            // Empty response - mark as skipped
+            $this->finalizeDetectionRecord($taskId, 'skipped');
+            return ['status' => 'skipped', 'reason' => 'empty_response'];
+        }
+
+        // Apply detection results to DTOs
+        $this->applyDetectionResults($backlinkDtos, $detectionResponse['items'] ?? []);
+
+        // Store updated backlinks with PBN data
+        DB::transaction(function () use ($backlinkDtos) {
+            $this->storeBacklinkDtos($backlinkDtos, false);
+        });
+
+        // Finalize PBN detection record
+        $this->finalizeDetectionRecord($taskId, 'completed', $detectionResponse);
+
+        Log::info('PBN detection completed synchronously', [
+            'task_id' => $taskId,
+            'domain' => $domain,
+            'backlinks_processed' => count($backlinkDtos),
+        ]);
+
+        return $detectionResponse;
+    }
+
+    /**
+     * Merge multiple batch summaries into a single summary
+     */
+    protected function mergeBatchSummaries(array $summaries): array
+    {
+        if (empty($summaries)) {
+            return [];
+        }
+
+        if (count($summaries) === 1) {
+            return $summaries[0];
+        }
+
+        $merged = [
+            'high_risk_count' => 0,
+            'medium_risk_count' => 0,
+            'low_risk_count' => 0,
+            'total_analyzed' => 0,
+        ];
+
+        foreach ($summaries as $summary) {
+            if (is_array($summary)) {
+                $merged['high_risk_count'] += (int) ($summary['high_risk_count'] ?? 0);
+                $merged['medium_risk_count'] += (int) ($summary['medium_risk_count'] ?? 0);
+                $merged['low_risk_count'] += (int) ($summary['low_risk_count'] ?? 0);
+                $merged['total_analyzed'] += (int) ($summary['total_analyzed'] ?? 0);
+            }
+        }
+
+        return $merged;
     }
 
     protected function applyDetectionResults(array $backlinks, array $results): void

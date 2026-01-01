@@ -1056,6 +1056,7 @@ class FaqGeneratorService
             );
         }
 
+        // STRICTLY limit to maximum 10 FAQs - no more
         return array_slice($validated, 0, 10);
     }
 
@@ -1080,6 +1081,18 @@ class FaqGeneratorService
 
     public function storeFaqsInDatabase(?string $url, ?string $topic, array $faqs, array $options, string $sourceHash): \App\Models\Faq
     {
+        // STRICTLY enforce maximum 10 FAQs before storing
+        $originalCount = count($faqs);
+        if ($originalCount > 10) {
+            $faqs = array_slice($faqs, 0, 10);
+            Log::warning('FAQ count exceeded 10, truncated to 10 FAQs', [
+                'url' => $url,
+                'topic' => $topic,
+                'original_count' => $originalCount,
+                'truncated_to' => 10,
+            ]);
+        }
+
         // Check if FAQ with same source_hash already exists
         $existingFaq = $this->faqRepository->findByHash($sourceHash);
         if ($existingFaq) {

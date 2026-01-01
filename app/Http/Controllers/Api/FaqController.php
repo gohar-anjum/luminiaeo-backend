@@ -68,7 +68,7 @@ class FaqController extends Controller
 
             return $this->responseModifier
                 ->setData([
-                                                                                                                                                                                                                                                                                                                                                'task_id' => $task->task_id,
+                    'task_id' => $task->task_id,
                     'status' => $task->status,
                     'progress' => 5,
                 ])

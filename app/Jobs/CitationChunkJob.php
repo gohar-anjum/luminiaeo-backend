@@ -6,7 +6,7 @@ use App\DTOs\CitationQueryResultDTO;
 use App\Interfaces\CitationRepositoryInterface;
 use App\Models\CitationTask;
 use App\Services\CitationService;
-use App\Services\DataForSEO\CitationService as DataForSEOCitationService;
+use App\Services\LLM\LLMClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -33,66 +33,135 @@ class CitationChunkJob implements ShouldQueue
     public function handle(
         CitationRepositoryInterface $repository,
         CitationService $service,
-        DataForSEOCitationService $dataForSEOCitationService
+        LLMClient $llmClient
     ): void {
         $task = $repository->find($this->taskId);
 
         if (!$task) {
-            Log::warning('Citation chunk job skipped; task missing', ['task_id' => $this->taskId]);
+            Log::warning('[Citation Chunk] Job skipped; task missing', ['task_id' => $this->taskId]);
             return;
         }
 
         if ($task->status === CitationTask::STATUS_FAILED) {
-            Log::info('Citation chunk job skipped; task already failed', ['task_id' => $task->id]);
+            Log::info('[Citation Chunk] Job skipped; task already failed', ['task_id' => $task->id]);
             return;
         }
 
-        // DataForSEO is required - no LLM fallback
-        if (!config('citations.dataforseo.enabled', false)) {
-            throw new \RuntimeException('DataForSEO citation service is required but not enabled. Please set DATAFORSEO_CITATION_ENABLED=true in your .env file.');
-        }
+        Log::info('[Citation Chunk] Starting citation validation with LLM providers', [
+            'task_id' => $task->id,
+            'domain' => $task->url,
+            'chunk_size' => count($this->chunk),
+            'offset' => $this->offset,
+            'total_queries' => $this->totalQueries,
+        ]);
 
         $results = [];
 
         try {
-            $dataForSEOResults = $dataForSEOCitationService->batchFindCitations($this->chunk, $task->url);
+            // Call GPT (OpenAI) for citation validation
+            Log::info('[Citation Chunk] Calling GPT (OpenAI) for citation validation', [
+                'task_id' => $task->id,
+                'chunk_size' => count($this->chunk),
+            ]);
 
+            $gptStartTime = microtime(true);
+            $gptResults = $llmClient->batchValidateCitations($this->chunk, $task->url, 'openai');
+            $gptDuration = round((microtime(true) - $gptStartTime) * 1000, 2);
+
+            Log::info('[Citation Chunk] GPT validation completed', [
+                'task_id' => $task->id,
+                'duration_ms' => $gptDuration,
+                'results_count' => count($gptResults),
+            ]);
+
+            // Call Gemini for citation validation
+            Log::info('[Citation Chunk] Calling Gemini for citation validation', [
+                'task_id' => $task->id,
+                'chunk_size' => count($this->chunk),
+            ]);
+
+            $geminiStartTime = microtime(true);
+            $geminiResults = $llmClient->batchValidateCitations($this->chunk, $task->url, 'gemini');
+            $geminiDuration = round((microtime(true) - $geminiStartTime) * 1000, 2);
+
+            Log::info('[Citation Chunk] Gemini validation completed', [
+                'task_id' => $task->id,
+                'duration_ms' => $geminiDuration,
+                'results_count' => count($geminiResults),
+            ]);
+
+            // Process results for each query
             foreach ($this->chunk as $index => $query) {
-                $dataForSEOResult = $dataForSEOResults[$query] ?? $this->defaultDataForSEOResult($query);
-                
-                // Format as dataforseo provider result (stored in 'gpt' field for compatibility)
-                $dataforseo = [
-                    'provider' => 'dataforseo',
-                    'citation_found' => $dataForSEOResult['citation_found'] ?? false,
-                    'confidence' => $dataForSEOResult['confidence'] ?? 0.0,
-                    'citation_references' => $dataForSEOResult['references'] ?? [],
-                    'competitors' => $dataForSEOResult['competitors'] ?? [],
-                    'explanation' => $dataForSEOResult['citation_found'] 
-                        ? 'Citation found via DataForSEO SERP analysis' 
-                        : 'No citation found via DataForSEO SERP analysis',
-                    'raw_response' => null,
+                $gptResult = $gptResults[$index] ?? $this->defaultResult('gpt', $query);
+                $geminiResult = $geminiResults[$index] ?? $this->defaultResult('gemini', $query);
+
+                // Convert LLM results to expected format
+                $gpt = [
+                    'provider' => 'gpt',
+                    'citation_found' => $gptResult['citation_found'] ?? false,
+                    'confidence' => $gptResult['confidence'] ?? 0.0,
+                    'citation_references' => $gptResult['citation_references'] ?? [],
+                    'competitors' => $gptResult['competitors'] ?? [],
+                    'explanation' => $gptResult['explanation'] ?? 'No explanation provided',
+                    'raw_response' => $gptResult['raw_response'] ?? null,
                     'query' => $query,
                 ];
-                
-                // Empty result for gemini (not used when DataForSEO is enabled)
-                $gemini = $this->defaultResult('gemini', $query);
 
+                $gemini = [
+                    'provider' => 'gemini',
+                    'citation_found' => $geminiResult['citation_found'] ?? false,
+                    'confidence' => $geminiResult['confidence'] ?? 0.0,
+                    'citation_references' => $geminiResult['citation_references'] ?? [],
+                    'competitors' => $geminiResult['competitors'] ?? [],
+                    'explanation' => $geminiResult['explanation'] ?? 'No explanation provided',
+                    'raw_response' => $geminiResult['raw_response'] ?? null,
+                    'query' => $query,
+                ];
+
+                // Merge competitors from both providers
                 $topCompetitors = $this->mergeCompetitors(
                     $task->url,
-                    $dataforseo['competitors'] ?? [],
-                    []
+                    $gpt['competitors'] ?? [],
+                    $gemini['competitors'] ?? []
                 );
 
-                $dto = new CitationQueryResultDTO((int) $index, $query, $dataforseo, $gemini, $topCompetitors);
+                Log::debug('[Citation Chunk] Processed query result', [
+                    'task_id' => $task->id,
+                    'query_index' => $index,
+                    'query' => $query,
+                    'gpt_citation_found' => $gpt['citation_found'],
+                    'gemini_citation_found' => $gemini['citation_found'],
+                    'gpt_confidence' => $gpt['confidence'],
+                    'gemini_confidence' => $gemini['confidence'],
+                ]);
+
+                $dto = new CitationQueryResultDTO((int) $index, $query, $gpt, $gemini, $topCompetitors);
                 $results[(string) $index] = $dto->toArray();
             }
-        } catch (\Exception $e) {
-            Log::error('DataForSEO citation check failed', [
+
+            Log::info('[Citation Chunk] All queries processed successfully', [
                 'task_id' => $task->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
+                'total_results' => count($results),
+                'gpt_duration_ms' => $gptDuration,
+                'gemini_duration_ms' => $geminiDuration,
             ]);
-            throw new \RuntimeException('DataForSEO citation check failed: ' . $e->getMessage());
+
+        } catch (\Exception $e) {
+            Log::error('[Citation Chunk] Citation validation failed', [
+                'task_id' => $task->id,
+                'error_message' => $e->getMessage(),
+                'error_trace' => $e->getTraceAsString(),
+            ]);
+
+            // Fallback: return empty results for failed chunk
+            foreach ($this->chunk as $index => $query) {
+                $gpt = $this->defaultResult('gpt', $query);
+                $gemini = $this->defaultResult('gemini', $query);
+                $topCompetitors = [];
+
+                $dto = new CitationQueryResultDTO((int) $index, $query, $gpt, $gemini, $topCompetitors);
+                $results[(string) $index] = $dto->toArray();
+            }
         }
 
         $meta = [
@@ -128,7 +197,7 @@ class CitationChunkJob implements ShouldQueue
 
         foreach ($lists as $list) {
             foreach ($list as $entry) {
-                // Handle both LLM format and DataForSEO format
+                // Handle LLM format
                 $domain = $this->normalizeDomain($entry['domain'] ?? ($entry['url'] ?? null));
                 if (!$domain || $this->isTargetDomain($domain, $targetDomain)) {
                     continue;
@@ -186,15 +255,6 @@ class CitationChunkJob implements ShouldQueue
         ];
     }
 
-    protected function defaultDataForSEOResult(string $query): array
-    {
-        return [
-            'citation_found' => false,
-            'confidence' => 0.0,
-            'references' => [],
-            'competitors' => [],
-        ];
-    }
 
     protected function normalizeDomain(?string $value): ?string
     {

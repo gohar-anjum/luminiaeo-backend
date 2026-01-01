@@ -2,8 +2,8 @@
 
 return [
     'default_queries' => (int) env('CITATION_DEFAULT_QUERIES', 5000),
-    'max_queries' => (int) env('CITATION_MAX_QUERIES_PER_TASK', env('DATAFORSEO_CITATION_MAX_QUERIES', 5000)),
-    'chunk_size' => (int) env('CITATION_CHUNK_SIZE', env('DATAFORSEO_CITATION_CHUNK_SIZE', 25)),
+    'max_queries' => (int) env('CITATION_MAX_QUERIES_PER_TASK', 5000),
+    'chunk_size' => (int) env('CITATION_CHUNK_SIZE', 25),
     'chunk_delay_seconds' => (int) env('CITATION_CHUNK_DELAY', 0),
     'query_generation' => [
         'max_per_call' => (int) env('CITATION_QUERY_GENERATION_BATCH', 250),
@@ -33,10 +33,4 @@ return [
         'heartbeat_seconds' => (int) env('CITATION_STREAM_HEARTBEAT', 10),
     ],
     'cache_days' => (int) env('CITATION_CACHE_DAYS', 30),
-    'dataforseo' => [
-        'enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
-        'llm_mentions_enabled' => env('DATAFORSEO_LLM_MENTIONS_ENABLED', false),
-        'llm_mentions_platform' => env('DATAFORSEO_LLM_MENTIONS_PLATFORM', 'google'), // 'google' or 'chat_gpt'
-        'llm_mentions_limit' => (int) env('DATAFORSEO_LLM_MENTIONS_LIMIT', 100),
-    ],
 ];

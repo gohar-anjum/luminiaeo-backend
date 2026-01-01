@@ -9,7 +9,6 @@ use App\Jobs\GenerateCitationQueriesJob;
 use App\Jobs\ProcessCitationTaskJob;
 use App\Models\CitationTask;
 use App\Services\LLM\LLMClient;
-use App\Services\DataForSEO\CitationService as DataForSEOCitationService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -17,16 +16,8 @@ class CitationService
 {
     public function __construct(
         protected CitationRepositoryInterface $repository,
-        protected LLMClient $llmClient,
-        protected ?DataForSEOCitationService $dataForSEOCitationService = null
+        protected LLMClient $llmClient
     ) {
-        if (config('citations.dataforseo.enabled', false) || config('citations.dataforseo.llm_mentions_enabled', false)) {
-            try {
-                $this->dataForSEOCitationService = app(DataForSEOCitationService::class);
-            } catch (\Exception $e) {
-                Log::warning('DataForSEO Citation Service not available', ['error' => $e->getMessage()]);
-            }
-        }
     }
 
     public function createTask(CitationRequestDTO $dto): CitationTask
@@ -84,250 +75,6 @@ class CitationService
         });
     }
 
-    /**
-     * Create task using LLM Mentions API directly
-     * This is a separate flow that skips query generation and SERP processing
-     * Returns results immediately from DataForSEO LLM Mentions API
-     */
-    public function createLLMMentionsTask(CitationRequestDTO $dto): CitationTask
-    {
-        $normalizedUrl = $this->normalizeUrl($dto->url);
-        $lockKey = 'citation:llm_mentions:lock:' . md5($normalizedUrl);
-        $timeout = config('cache_locks.citations.timeout', 60);
-        
-        return Cache::lock($lockKey, $timeout)->get(function () use ($normalizedUrl, $dto) {
-            $cacheDays = config('citations.cache_days', 30);
-            $existingTask = $this->repository->findCompletedByUrl($normalizedUrl, $cacheDays);
-
-            if ($existingTask && isset($existingTask->meta['llm_mentions']) && $existingTask->meta['llm_mentions']) {
-                Log::info('Returning cached LLM Mentions task', [
-                    'task_id' => $existingTask->id,
-                    'url' => $normalizedUrl,
-                    'cached_at' => $existingTask->created_at,
-                ]);
-                return $existingTask;
-            }
-
-            $inProgressTask = $this->repository->findInProgressByUrl($normalizedUrl);
-            if ($inProgressTask && isset($inProgressTask->meta['llm_mentions']) && $inProgressTask->meta['llm_mentions']) {
-                Log::info('Returning existing in-progress LLM Mentions task', [
-                    'task_id' => $inProgressTask->id,
-                    'url' => $normalizedUrl,
-                    'status' => $inProgressTask->status,
-                ]);
-                return $inProgressTask;
-            }
-
-            // Create task with LLM Mentions status
-            $task = $this->repository->create([
-                'user_id' => \Illuminate\Support\Facades\Auth::id(),
-                'url' => $normalizedUrl,
-                'status' => CitationTask::STATUS_PROCESSING,
-                'meta' => [
-                    'llm_mentions' => true,
-                    'platform' => config('citations.dataforseo.llm_mentions_platform', 'google'),
-                ],
-            ]);
-
-            // Get LLM Mentions data directly
-            try {
-                if (!$this->dataForSEOCitationService) {
-                    throw new \RuntimeException('DataForSEO Citation Service not available');
-                }
-
-                $platform = config('citations.dataforseo.llm_mentions_platform', 'google');
-                $locationCode = config('services.citations.default_location_code', 2840);
-                $languageCode = config('services.citations.default_language_code', 'en');
-
-                Log::info('Fetching LLM Mentions data directly', [
-                    'task_id' => $task->id,
-                    'url' => $normalizedUrl,
-                    'platform' => $platform,
-                ]);
-
-                $llmMentionsData = $this->dataForSEOCitationService->getLLMMentions(
-                    $normalizedUrl,
-                    $platform,
-                    $locationCode,
-                    $languageCode,
-                    [
-                        'limit' => config('citations.dataforseo.llm_mentions_limit', 1000),
-                    ]
-                );
-
-                // Format results for compatibility with existing response structure
-                $formattedResults = $this->formatLLMMentionsResults($llmMentionsData, $normalizedUrl);
-
-                // Finalize task immediately with LLM Mentions results
-                $task = $this->repository->update($task, [
-                    'status' => CitationTask::STATUS_COMPLETED,
-                    'results' => [
-                        'by_query' => $formattedResults['by_query'] ?? [],
-                        'llm_mentions' => $llmMentionsData,
-                    ],
-                    'competitors' => $formattedResults['competitors'] ?? [],
-                    'meta' => array_merge($task->meta ?? [], [
-                        'llm_mentions' => true,
-                        'platform' => $platform,
-                        'completed_at' => now()->toIso8601String(),
-                        'gpt_score' => $formattedResults['gpt_score'] ?? 0.0,
-                        'gemini_score' => 0.0,
-                        'dataforseo_score' => $formattedResults['gpt_score'] ?? 0.0,
-                    ]),
-                ]);
-
-                Log::info('LLM Mentions task completed immediately', [
-                    'task_id' => $task->id,
-                    'url' => $normalizedUrl,
-                    'mentions_count' => count($formattedResults['by_query'] ?? []),
-                ]);
-
-                return $task->fresh();
-            } catch (\Exception $e) {
-                Log::error('LLM Mentions API call failed', [
-                    'task_id' => $task->id,
-                    'url' => $normalizedUrl,
-                    'error' => $e->getMessage(),
-                ]);
-
-                return $this->recordFailure($task, 'LLM Mentions API failed: ' . $e->getMessage());
-            }
-        });
-    }
-
-    /**
-     * Format LLM Mentions API response to match existing citation result structure
-     */
-    protected function formatLLMMentionsResults(array $llmMentionsData, string $targetUrl): array
-    {
-        $byQuery = [];
-        $totalMentions = 0;
-        $competitorData = [];
-        $targetDomain = $this->normalizeDomainForGrouping($targetUrl);
-
-        // Process LLM Mentions results
-        // Response structure: result[0].items[] or result[] directly
-        $items = [];
-        if (isset($llmMentionsData[0]['items']) && is_array($llmMentionsData[0]['items'])) {
-            $items = $llmMentionsData[0]['items'];
-        } elseif (is_array($llmMentionsData) && isset($llmMentionsData[0]) && is_array($llmMentionsData[0])) {
-            // Check if first element has 'question' or 'sources' (it's an item)
-            if (isset($llmMentionsData[0]['question']) || isset($llmMentionsData[0]['sources'])) {
-                $items = $llmMentionsData;
-            }
-        }
-
-        Log::info('Processing LLM Mentions results', [
-            'items_count' => count($items),
-            'result_structure' => array_keys($llmMentionsData[0] ?? []),
-        ]);
-
-        foreach ($items as $index => $item) {
-            if (!is_array($item)) {
-                continue;
-            }
-
-            $query = $item['question'] ?? $item['query'] ?? $item['full_question'] ?? "Mention #{$index}";
-            $sources = $item['sources'] ?? $item['cited_sources'] ?? $item['related_sources'] ?? [];
-            $citationFound = !empty($sources) && is_array($sources);
-            
-            $citations = [];
-            $competitors = [];
-            
-            if ($citationFound) {
-                foreach ($sources as $source) {
-                    if (!is_array($source)) {
-                        continue;
-                    }
-
-                    $sourceUrl = $source['url'] ?? $source['domain'] ?? $source['link'] ?? '';
-                    if (empty($sourceUrl)) {
-                        continue;
-                    }
-                    
-                    $sourceDomain = $this->normalizeDomainForGrouping($sourceUrl);
-                    $targetVariations = $this->getDomainVariations($targetUrl);
-                    
-                    if ($this->isTargetDomain($sourceDomain, $targetVariations)) {
-                        $citations[] = $sourceUrl;
-                        $totalMentions++;
-                    } else {
-                        $competitors[] = [
-                            'domain' => $sourceDomain,
-                            'url' => $sourceUrl,
-                            'title' => $source['title'] ?? $source['name'] ?? '',
-                        ];
-                        
-                        // Track competitor data
-                        if (!isset($competitorData[$sourceDomain])) {
-                            $competitorData[$sourceDomain] = [
-                                'domain' => $sourceDomain,
-                                'citation_count' => 0,
-                                'urls' => [],
-                            ];
-                        }
-                        $competitorData[$sourceDomain]['citation_count']++;
-                        if (!in_array($sourceUrl, $competitorData[$sourceDomain]['urls'])) {
-                            $competitorData[$sourceDomain]['urls'][] = $sourceUrl;
-                        }
-                    }
-                }
-            }
-
-            $confidence = $citationFound ? min(1.0, count($citations) / 10.0) : 0.0;
-
-            $byQuery[(string) $index] = [
-                'query' => $query,
-                'gpt' => [
-                    'provider' => 'dataforseo_llm_mentions',
-                    'citation_found' => $citationFound,
-                    'confidence' => $confidence,
-                    'citation_references' => array_slice($citations, 0, 10),
-                    'competitors' => array_slice($competitors, 0, 5),
-                    'explanation' => $citationFound 
-                        ? 'Citation found via DataForSEO LLM Mentions API' 
-                        : 'No citation found via DataForSEO LLM Mentions API',
-                    'raw_response' => $item,
-                ],
-                'gemini' => [
-                    'provider' => 'gemini',
-                    'citation_found' => false,
-                    'confidence' => 0.0,
-                    'citation_references' => [],
-                    'competitors' => [],
-                    'explanation' => 'Not used when LLM Mentions API is enabled',
-                ],
-                'top_competitors' => array_slice($competitors, 0, 2),
-            ];
-        }
-
-        // Calculate scores
-        $totalQueries = max(count($byQuery), 1);
-        $gptScore = round(($totalMentions / $totalQueries) * 100, 2);
-
-        // Format competitors
-        $competitors = [];
-        foreach ($competitorData as $domain => $data) {
-            $competitors[] = [
-                'domain' => $domain,
-                'citation_count' => $data['citation_count'],
-                'urls' => array_slice($data['urls'], 0, 10),
-            ];
-        }
-        usort($competitors, fn($a, $b) => $b['citation_count'] <=> $a['citation_count']);
-        $competitors = array_slice($competitors, 0, 20);
-
-        return [
-            'by_query' => $byQuery,
-            'competitors' => [
-                'total_citations' => $totalMentions,
-                'total_queries' => $totalQueries,
-                'competitors' => $competitors,
-            ],
-            'gpt_score' => $gptScore,
-        ];
-    }
-
     protected function normalizeUrl(string $url): string
     {
         $url = trim($url);
@@ -361,27 +108,7 @@ class CitationService
 
     public function generateQueries(string $url, int $numQueries): array
     {
-        // When DataForSEO is enabled, skip LLM calls to save time and cost
-        if (config('citations.dataforseo.enabled', false)) {
-            Log::info('DataForSEO enabled - skipping LLM query generation, using template-based queries', [
-                'url' => $url,
-                'num_queries' => $numQueries,
-            ]);
-            
-            // Generate queries using template-based approach (faster, no LLM cost)
-            $templateQueries = $this->buildTemplateQueries($url, $numQueries);
-            $queries = collect($templateQueries);
-
-            return $queries
-                ->map(fn ($q) => $this->sanitizeQuery($q))
-                ->filter()
-                ->unique()
-                ->take($numQueries)
-                ->values()
-                ->all();
-        }
-
-        // Use LLM to generate queries when DataForSEO is not enabled
+        // Use LLM to generate queries
         $llmQueries = $this->llmClient->generateQueries($url, $numQueries);
         $queries = collect($llmQueries);
 
@@ -397,7 +124,7 @@ class CitationService
     public function dispatchChunkJobs(CitationTask $task): void
     {
         $queries = $task->queries ?? [];
-        $chunkSize = max(1, config('citations.chunk_size', config('services.dataforseo.citation.chunk_size', 25)));
+        $chunkSize = max(1, config('citations.chunk_size', 25));
         $chunks = array_chunk($queries, $chunkSize, true);
         $delay = config('citations.chunk_delay_seconds', 0);
 
@@ -421,7 +148,7 @@ class CitationService
             $this->repository->update($task, ['status' => CitationTask::STATUS_PROCESSING]);
         }
 
-        $chunkSize = max(1, config('citations.chunk_size', config('services.dataforseo.citation.chunk_size', 25)));
+        $chunkSize = max(1, config('citations.chunk_size', 25));
         $chunks = array_chunk($subset, $chunkSize, true);
 
         foreach ($chunks as $chunk) {
@@ -453,9 +180,6 @@ class CitationService
             'completed_at' => now()->toIso8601String(),
         ];
 
-        if (isset($stats['dataforseo_score'])) {
-            $meta['dataforseo_score'] = $stats['dataforseo_score'];
-        }
 
         return $this->repository->updateCompetitorsAndMeta(
             $task,
@@ -509,11 +233,6 @@ class CitationService
                 if (!empty($entry[$provider]['citation_found'])) {
                     $queryHasCitation = true;
                 }
-                if ($provider === 'gpt' && isset($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
-                    if (!empty($entry['gpt']['citation_found'])) {
-                        $queryHasCitation = true;
-                    }
-                }
             }
 
             if ($queryHasCitation) {
@@ -552,9 +271,6 @@ class CitationService
 
                 foreach (['gpt', 'gemini'] as $provider) {
                     $providerCompetitors = $entry[$provider]['competitors'] ?? [];
-                    if ($provider === 'gpt' && isset($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
-                        $providerCompetitors = array_merge($providerCompetitors, $entry['gpt']['competitors'] ?? []);
-                    }
                     foreach ($providerCompetitors as $providerCompetitor) {
                         $providerDomain = $this->normalizeDomainForGrouping($providerCompetitor['domain'] ?? ($providerCompetitor['url'] ?? ''));
                         if ($providerDomain && $providerDomain === $domain) {
@@ -664,7 +380,6 @@ class CitationService
         $total = max(count($results), 1);
         $gptHits = 0;
         $geminiHits = 0;
-        $dataforseoHits = 0;
 
         foreach ($results as $entry) {
             if (!empty($entry['gpt']['citation_found'])) {
@@ -673,19 +388,6 @@ class CitationService
             if (!empty($entry['gemini']['citation_found'])) {
                 $geminiHits++;
             }
-            if (!empty($entry['gpt']['provider']) && $entry['gpt']['provider'] === 'dataforseo') {
-                if (!empty($entry['gpt']['citation_found'])) {
-                    $dataforseoHits++;
-                }
-            }
-        }
-
-        if (config('citations.dataforseo.enabled', false) && $dataforseoHits > 0) {
-            return [
-                'gpt_score' => round(($dataforseoHits / $total) * 100, 2),
-                'gemini_score' => 0.0,
-                'dataforseo_score' => round(($dataforseoHits / $total) * 100, 2),
-            ];
         }
 
         return [

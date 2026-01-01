@@ -30,28 +30,7 @@ class CitationController extends Controller
 
         $dto = CitationRequestDTO::fromArray($validated, config('citations.default_queries', 1000));
 
-        // If LLM Mentions API is enabled, use the separate LLM Mentions flow
-        if (config('citations.dataforseo.llm_mentions_enabled', false)) {
-            $task = $this->citationService->createLLMMentionsTask($dto);
-
-            // LLM Mentions returns immediately, so return 200 instead of 202
-            $message = $task->status === CitationTask::STATUS_COMPLETED
-                ? 'LLM Mentions data retrieved successfully.'
-                : 'LLM Mentions task created. ';
-
-            return $this->responseModifier
-                ->setData([
-                    'task_id' => $task->id,
-                    'status' => $task->status,
-                    'status_url' => route('citations.status', $task->id),
-                    'results_url' => route('citations.results', $task->id),
-                ])
-                ->setMessage($message)
-                ->setResponseCode($task->status === CitationTask::STATUS_COMPLETED ? 200 : 202)
-                ->response();
-        }
-
-        // Use the standard citation flow (SERP API)
+        // Use the standard citation flow
         $task = $this->citationService->createTask($dto);
 
         return $this->responseModifier

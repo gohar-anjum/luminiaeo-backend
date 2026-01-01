@@ -43,14 +43,6 @@ return [
             'max_keywords' => env('DATAFORSEO_SEARCH_VOLUME_MAX_KEYWORDS', 100),
             'batch_size' => env('DATAFORSEO_SEARCH_VOLUME_BATCH_SIZE', 100),
         ],
-        // Citation API limits
-        'citation' => [
-            'enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
-            'max_depth' => env('DATAFORSEO_CITATION_MAX_DEPTH', 100),
-            'default_depth' => env('DATAFORSEO_CITATION_DEFAULT_DEPTH', 10),
-            'chunk_size' => env('DATAFORSEO_CITATION_CHUNK_SIZE', 25),
-            'max_queries' => env('DATAFORSEO_CITATION_MAX_QUERIES', 5000),
-        ],
         // Backlinks API limits
         'backlinks' => [
             'default_limit' => env('DATAFORSEO_BACKLINKS_DEFAULT_LIMIT', 100),
@@ -70,7 +62,6 @@ return [
         // Legacy support (deprecated, use nested configs above)
         'backlinks_limit' => env('DATAFORSEO_BACKLINKS_LIMIT', 100),
         'summary_limit' => env('DATAFORSEO_SUMMARY_LIMIT', 100),
-        'citation_enabled' => env('DATAFORSEO_CITATION_ENABLED', false),
         'keyword_planner_enabled' => env('DATAFORSEO_KEYWORD_PLANNER_ENABLED', false),
     ],
 
