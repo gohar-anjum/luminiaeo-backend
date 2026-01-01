@@ -100,11 +100,7 @@ class KeywordResearchOrchestratorService
         $useGooglePlanner = $settings['enable_google_planner'] ?? true;
         $useDataForSEOPlanner = config('services.dataforseo.keyword_planner_enabled', false);
         
-        // Skip Google Planner if DataForSEO is enabled via config
         if ($useDataForSEOPlanner) {
-            Log::info('Skipping Google Keyword Planner - DataForSEO service is active', [
-                'job_id' => $job->id,
-            ]);
             $useGooglePlanner = false;
         }
         
@@ -122,16 +118,7 @@ class KeywordResearchOrchestratorService
                     $maxPlannerKeywords
                 );
                 $allKeywords = array_merge($allKeywords, $plannerKeywords);
-
-                Log::info('Google Keyword Planner completed', [
-                    'job_id' => $job->id,
-                    'keywords_found' => count($plannerKeywords),
-                ]);
             } catch (\Throwable $e) {
-                Log::error('Google Keyword Planner failed', [
-                    'job_id' => $job->id,
-                    'error' => $e->getMessage(),
-                ]);
             }
         }
 
@@ -150,16 +137,7 @@ class KeywordResearchOrchestratorService
                     $maxPlannerKeywords
                 );
                 $allKeywords = array_merge($allKeywords, $plannerKeywords);
-
-                Log::info('DataForSEO Keyword Planner completed', [
-                    'job_id' => $job->id,
-                    'keywords_found' => count($plannerKeywords),
-                ]);
             } catch (\Throwable $e) {
-                Log::error('DataForSEO Keyword Planner failed', [
-                    'job_id' => $job->id,
-                    'error' => $e->getMessage(),
-                ]);
             }
         }
 
@@ -233,11 +211,6 @@ class KeywordResearchOrchestratorService
             if ($projectId) {
                 $projectSource = 'job';
             } elseif ($job->user_id) {
-                Log::info('Job does not have project_id, attempting to get user\'s first project', [
-                    'job_id' => $job->id,
-                    'user_id' => $job->user_id,
-                ]);
-                
                 $firstProject = DB::table('projects')
                     ->where('user_id', $job->user_id)
                     ->first();
@@ -245,19 +218,10 @@ class KeywordResearchOrchestratorService
                 
                 if ($projectId) {
                     $projectSource = 'user_first_project';
-                    Log::info('Found project_id from user\'s first project', [
-                        'job_id' => $job->id,
-                        'project_id' => $projectId,
-                    ]);
                 }
             }
             
             if ($projectId === null && $job->user_id) {
-                Log::info('User has no projects, auto-creating default project', [
-                    'job_id' => $job->id,
-                    'user_id' => $job->user_id,
-                ]);
-                
                 try {
                     $projectId = DB::table('projects')->insertGetId([
                         'user_id' => $job->user_id,
@@ -268,17 +232,7 @@ class KeywordResearchOrchestratorService
                     ]);
                     
                     $projectSource = 'auto_created';
-                    Log::info('Auto-created default project for user', [
-                        'job_id' => $job->id,
-                        'user_id' => $job->user_id,
-                        'project_id' => $projectId,
-                    ]);
                 } catch (\Exception $e) {
-                    Log::error('Failed to auto-create default project', [
-                        'job_id' => $job->id,
-                        'user_id' => $job->user_id,
-                        'error' => $e->getMessage(),
-                    ]);
                     throw new \RuntimeException(
                         'Cannot insert keywords: project_id is required. Failed to auto-create default project: ' . $e->getMessage()
                     );
@@ -286,23 +240,11 @@ class KeywordResearchOrchestratorService
             }
             
             if ($projectId === null) {
-                Log::error('Cannot resolve project_id for keyword insertion', [
-                    'job_id' => $job->id,
-                    'job_project_id' => $job->project_id,
-                    'user_id' => $job->user_id,
-                ]);
-                
                 throw new \RuntimeException(
                     'Cannot insert keywords: project_id is required but not found. ' .
                     'Please ensure the keyword research job has a valid project_id or the user has at least one project.'
                 );
             }
-            
-            Log::info('Resolved project_id for keyword insertion', [
-                'job_id' => $job->id,
-                'project_id' => $projectId,
-                'source' => $projectSource,
-            ]);
 
             foreach ($batches as $batch) {
                 $insertData = [];
@@ -377,11 +319,6 @@ class KeywordResearchOrchestratorService
                     try {
                         Keyword::insert($insertData);
                     } catch (\Exception $e) {
-                        Log::warning('Some keywords may have failed to insert', [
-                            'job_id' => $job->id,
-                            'error' => $e->getMessage(),
-                            'batch_size' => count($insertData),
-                        ]);
                     }
                 }
 
@@ -456,13 +393,7 @@ class KeywordResearchOrchestratorService
             }
         }
         
-        // Explicitly filter out question_variations if it somehow got added
         $selectColumns = array_filter($selectColumns, fn($col) => $col !== 'question_variations');
-        
-        Log::debug('Keyword select columns', [
-            'columns' => $selectColumns,
-            'existing_columns' => $existingColumns,
-        ]);
         
         $keywords = $job->keywords()
             ->select($selectColumns)

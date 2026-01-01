@@ -66,13 +66,7 @@ class KeywordCacheRepository implements KeywordCacheRepositoryInterface
 
     public function deleteExpired(): int
     {
-        $deleted = KeywordCache::expired()->delete();
-
-        Log::info('Deleted expired keyword cache entries', [
-            'count' => $deleted,
-        ]);
-
-        return $deleted;
+        return KeywordCache::expired()->delete();
     }
 
     public function findByCluster(string $clusterId): Collection
@@ -101,20 +95,10 @@ class KeywordCacheRepository implements KeywordCacheRepositoryInterface
                     KeywordCache::create($item);
                     $inserted++;
                 } catch (\Exception $e) {
-
-                    Log::warning('Failed to insert keyword cache entry', [
-                        'keyword' => $item['keyword'] ?? 'unknown',
-                        'error' => $e->getMessage(),
-                    ]);
                 }
             }
 
             DB::commit();
-
-            Log::info('Bulk created keyword cache entries', [
-                'total' => count($keywords),
-                'inserted' => $inserted,
-            ]);
 
             return $inserted;
         } catch (\Exception $e) {
@@ -259,14 +243,7 @@ class KeywordCacheRepository implements KeywordCacheRepositoryInterface
 
             DB::commit();
 
-            $total = count($toInsert) + count($toUpdate);
-            Log::info('Bulk updated keyword cache entries', [
-                'total' => count($keywords),
-                'inserted' => count($toInsert),
-                'updated' => count($toUpdate),
-            ]);
-
-            return $total;
+            return count($toInsert) + count($toUpdate);
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Failed to bulk update keyword cache entries', [
@@ -282,6 +259,21 @@ class KeywordCacheRepository implements KeywordCacheRepositoryInterface
 
         return KeywordCache::where('expires_at', '<=', $threshold)
             ->where('expires_at', '>', now())
+            ->get();
+    }
+
+    public function findByTopic(string $topic, string $languageCode = 'en', int $locationCode = 2840): Collection
+    {
+        $normalizedTopic = strtolower(trim($topic));
+        
+        return KeywordCache::where('language_code', $languageCode)
+            ->where('location_code', $locationCode)
+            ->where('expires_at', '>', now())
+            ->where(function($query) use ($normalizedTopic) {
+                $query->whereJsonContains('metadata->topic', $normalizedTopic)
+                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.topic'))) = ?", [$normalizedTopic])
+                      ->orWhereJsonContains('metadata->topics', $normalizedTopic);
+            })
             ->get();
     }
 }
