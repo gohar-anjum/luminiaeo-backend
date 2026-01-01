@@ -17,6 +17,8 @@ Route::get('/login', function () {
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->name('password.forgot');
+Route::post('/reset-password', [AuthController::class, 'resetPassword'])->name('password.reset');
 
 Route::get('/health', [\App\Http\Controllers\Api\HealthController::class, 'check'])->name('health.check');
 
