@@ -60,69 +60,179 @@ def _risk_level(prob: float, thresholds: Optional[dict[str, float]] = None) -> s
 @app.post("/detect", response_model=BacklinkDetectionResponse)
 async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse:
     try:
+        logger.info("[PBN Microservice] POST /detect request received", 
+                   task_id=request.task_id, 
+                   domain=request.domain, 
+                   backlinks_count=len(request.backlinks) if request.backlinks else 0,
+                   has_summary=bool(request.summary))
+
         if not request.backlinks:
+            logger.error("[PBN Microservice] Request validation failed: empty backlinks",
+                        task_id=request.task_id,
+                        domain=request.domain)
             raise HTTPException(status_code=400, detail="Backlinks payload cannot be empty")
 
         max_backlinks = int(os.getenv('PBN_MAX_BACKLINKS', '1000'))
         if len(request.backlinks) > max_backlinks:
+            logger.error("[PBN Microservice] Request validation failed: too many backlinks",
+                        task_id=request.task_id,
+                        domain=request.domain,
+                        backlinks_count=len(request.backlinks),
+                        max_allowed=max_backlinks)
             raise HTTPException(
                 status_code=400,
                 detail=f"Maximum {max_backlinks} backlinks allowed per request"
             )
+
+        logger.info("[PBN Microservice] Request validated successfully",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   backlinks_count=len(request.backlinks),
+                   max_backlinks=max_backlinks)
 
         start = time.perf_counter()
         peers = request.backlinks
         items: list[DetectionItem] = []
         summary = DetectionSummary()
 
+        logger.info("[PBN Microservice] Starting network feature precomputation",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   backlinks_count=len(peers))
+
+        network_features_start = time.perf_counter()
         network_features = feature_extractor.precompute_network_features(peers)
+        network_features_duration = round((time.perf_counter() - network_features_start) * 1000, 2)
+        
+        logger.info("[PBN Microservice] Network features precomputed",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   duration_ms=network_features_duration)
+
+        logger.info("[PBN Microservice] Starting network stats precomputation",
+                   task_id=request.task_id,
+                   domain=request.domain)
+
+        network_stats_start = time.perf_counter()
         network_stats = rule_engine.precompute_network_stats(peers)
+        network_stats_duration = round((time.perf_counter() - network_stats_start) * 1000, 2)
+        
+        logger.info("[PBN Microservice] Network stats precomputed",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   duration_ms=network_stats_duration)
+
+        logger.info("[PBN Microservice] Starting content similarity calculation",
+                   task_id=request.task_id,
+                   domain=request.domain)
 
         try:
             snippets = [
                 (signal.raw or {}).get("text_pre", "") + " " + (signal.raw or {}).get("text_post", "")
                 for signal in peers
             ]
+            content_sim_start = time.perf_counter()
             network_content_similarity = content_similarity_service.detect_duplicates(snippets)
+            content_sim_duration = round((time.perf_counter() - content_sim_start) * 1000, 2)
+            
+            logger.info("[PBN Microservice] Content similarity calculated",
+                       task_id=request.task_id,
+                       domain=request.domain,
+                       similarity_score=network_content_similarity,
+                       duration_ms=content_sim_duration)
         except Exception as e:
-            logger.warning("Content similarity calculation failed", error=str(e))
+            logger.warning("[PBN Microservice] Content similarity calculation failed",
+                          task_id=request.task_id,
+                          domain=request.domain,
+                          error=str(e))
             network_content_similarity = 0.0
 
         adaptive_thresholds_dict = None
         if settings.use_ensemble or settings.use_enhanced_features:
+            logger.info("[PBN Microservice] Adjusting adaptive thresholds",
+                       task_id=request.task_id,
+                       domain=request.domain,
+                       total_backlinks=len(peers))
             try:
                 adaptive_thresholds_dict = adaptive_thresholds.adjust_thresholds(
                     total_backlinks=len(peers)
                 )
+                logger.info("[PBN Microservice] Adaptive thresholds adjusted",
+                           task_id=request.task_id,
+                           domain=request.domain,
+                           thresholds=adaptive_thresholds_dict)
             except Exception as e:
-                logger.warning("Adaptive threshold adjustment failed", error=str(e))
+                logger.warning("[PBN Microservice] Adaptive threshold adjustment failed",
+                              task_id=request.task_id,
+                              domain=request.domain,
+                              error=str(e))
 
         enhanced_features_map = {}
         if settings.use_enhanced_features:
-            if settings.use_parallel_processing and len(peers) > settings.parallel_threshold:
+            use_parallel = settings.use_parallel_processing and len(peers) > settings.parallel_threshold
+            logger.info("[PBN Microservice] Extracting enhanced features",
+                       task_id=request.task_id,
+                       domain=request.domain,
+                       use_parallel=use_parallel,
+                       parallel_threshold=settings.parallel_threshold,
+                       parallel_workers=settings.parallel_workers)
+
+            if use_parallel:
+                enhanced_start = time.perf_counter()
                 def extract_features(backlink):
                     try:
                         return backlink.source_url, enhanced_feature_extractor.extract_all_enhanced_features(backlink, peers)
                     except Exception as e:
-                        logger.warning("Enhanced feature extraction failed", backlink=str(backlink.source_url), error=str(e))
+                        logger.warning("[PBN Microservice] Enhanced feature extraction failed for backlink",
+                                     task_id=request.task_id,
+                                     domain=request.domain,
+                                     backlink=str(backlink.source_url),
+                                     error=str(e))
                         return backlink.source_url, {}
                 
                 with ThreadPoolExecutor(max_workers=settings.parallel_workers) as executor:
                     results = executor.map(extract_features, peers)
                     enhanced_features_map = dict(results)
+                enhanced_duration = round((time.perf_counter() - enhanced_start) * 1000, 2)
+                
+                logger.info("[PBN Microservice] Enhanced features extracted (parallel)",
+                           task_id=request.task_id,
+                           domain=request.domain,
+                           duration_ms=enhanced_duration,
+                           features_extracted=len(enhanced_features_map))
             else:
+                enhanced_start = time.perf_counter()
                 for backlink in peers:
                     try:
                         enhanced_features_map[backlink.source_url] = enhanced_feature_extractor.extract_all_enhanced_features(
                             backlink, peers
                         )
                     except Exception as e:
-                        logger.warning("Enhanced feature extraction failed",
-                                     backlink=str(backlink.source_url), error=str(e))
+                        logger.warning("[PBN Microservice] Enhanced feature extraction failed",
+                                     task_id=request.task_id,
+                                     domain=request.domain,
+                                     backlink=str(backlink.source_url),
+                                     error=str(e))
                         enhanced_features_map[backlink.source_url] = {}
+                enhanced_duration = round((time.perf_counter() - enhanced_start) * 1000, 2)
+                
+                logger.info("[PBN Microservice] Enhanced features extracted (sequential)",
+                           task_id=request.task_id,
+                           domain=request.domain,
+                           duration_ms=enhanced_duration,
+                           features_extracted=len(enhanced_features_map))
 
         summary = DetectionSummary()
-        if settings.use_parallel_processing and len(peers) > settings.parallel_threshold:
+        use_parallel = settings.use_parallel_processing and len(peers) > settings.parallel_threshold
+        
+        logger.info("[PBN Microservice] Starting backlink processing",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   processing_mode="parallel" if use_parallel else "sequential",
+                   backlinks_count=len(peers))
+
+        processing_start = time.perf_counter()
+        if use_parallel:
             items = await _process_backlinks_parallel(
                 peers, network_features, network_stats, enhanced_features_map,
                 network_content_similarity, adaptive_thresholds_dict, summary, settings
@@ -132,12 +242,33 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
                 peers, network_features, network_stats, enhanced_features_map,
                 network_content_similarity, adaptive_thresholds_dict, summary, settings
             )
+        processing_duration = round((time.perf_counter() - processing_start) * 1000, 2)
+
+        logger.info("[PBN Microservice] Backlink processing completed",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   processing_mode="parallel" if use_parallel else "sequential",
+                   items_count=len(items),
+                   processing_duration_ms=processing_duration,
+                   high_risk_count=summary.high_risk_count,
+                   medium_risk_count=summary.medium_risk_count,
+                   low_risk_count=summary.low_risk_count)
 
         latency_ms = int((time.perf_counter() - start) * 1000)
         model_version = "lightweight-v1.0" if not classifier_service.use_ml_model else "lr-1.0"
         meta = DetectionMeta(latency_ms=latency_ms, model_version=model_version)
 
-        return BacklinkDetectionResponse(
+        logger.info("[PBN Microservice] Preparing response",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   total_latency_ms=latency_ms,
+                   model_version=model_version,
+                   items_count=len(items),
+                   high_risk_count=summary.high_risk_count,
+                   medium_risk_count=summary.medium_risk_count,
+                   low_risk_count=summary.low_risk_count)
+
+        response = BacklinkDetectionResponse(
             domain=request.domain,
             task_id=request.task_id,
             generated_at=datetime.utcnow(),
@@ -145,10 +276,24 @@ async def detect(request: BacklinkDetectionRequest) -> BacklinkDetectionResponse
             summary=summary,
             meta=meta,
         )
+
+        logger.info("[PBN Microservice] Response prepared successfully",
+                   task_id=request.task_id,
+                   domain=request.domain,
+                   total_latency_ms=latency_ms,
+                   items_count=len(items))
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("PBN detection failed", error=str(e), exc_info=True)
+        task_id = request.task_id if 'request' in locals() else None
+        domain = request.domain if 'request' in locals() else None
+        logger.error("[PBN Microservice] PBN detection failed with exception",
+                    task_id=task_id,
+                    domain=domain,
+                    error=str(e),
+                    exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 async def _process_backlinks_sequential(
