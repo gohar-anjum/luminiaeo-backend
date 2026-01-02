@@ -1397,6 +1397,11 @@ class FaqGeneratorService
             if (empty($serpQuestions)) {
                 throw new \RuntimeException('No questions found from SERP. Please ensure SERP service is configured.');
             }
+            
+            // STRICTLY limit SERP questions to 10 max when storing
+            if (count($serpQuestions) > 10) {
+                $serpQuestions = array_slice($serpQuestions, 0, 10);
+            }
 
             $alsoAskedService = $this->getAlsoAskedService();
             $alsoAskedSearchId = null;

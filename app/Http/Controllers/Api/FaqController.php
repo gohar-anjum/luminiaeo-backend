@@ -116,6 +116,18 @@ class FaqController extends Controller
             $paaAnswers = $task->paa_answers ?? [];
             $questionKeywords = $task->question_keywords ?? [];
 
+            // STRICTLY limit SERP questions to 10 max
+            if (count($serpQuestions) > 10) {
+                $serpQuestions = array_slice($serpQuestions, 0, 10);
+            }
+            
+            // STRICTLY limit PAA questions so total (SERP + PAA) = 10 max
+            $serpCount = count($serpQuestions);
+            $maxPaaQuestions = max(0, 10 - $serpCount);
+            if (count($paaQuestions) > $maxPaaQuestions) {
+                $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
+            }
+
             // Build questions array with progressive answers
             $questions = [];
             
@@ -163,6 +175,11 @@ class FaqController extends Controller
                 }
                 
                 $questions[] = $questionData;
+            }
+            
+            // STRICT FINAL CHECK: Ensure total questions never exceeds 10
+            if (count($questions) > 10) {
+                $questions = array_slice($questions, 0, 10);
             }
 
             // If completed, also check final FAQ record for any missing answers
@@ -214,7 +231,8 @@ class FaqController extends Controller
                 $progress = 5; // Just started
             }
 
-            $totalQuestions = count($serpQuestions) + count($paaQuestions);
+            // Calculate total from limited questions array (not from raw data)
+            $totalQuestions = count($questions);
             $data = [
                 'status' => $task->status,
                 'progress' => $progress,

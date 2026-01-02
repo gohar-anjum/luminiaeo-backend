@@ -60,13 +60,23 @@ class ProcessFaqTask implements ShouldQueue
             if (!empty($task->alsoasked_questions) && is_array($task->alsoasked_questions)) {
                 // Use existing AlsoAsked questions from task
                 $paaQuestions = $task->alsoasked_questions;
+                
+                // Strictly limit PAA questions so total (SERP + PAA) = 10 max
+                $serpCount = count($task->serp_questions ?? []);
+                $maxPaaQuestions = max(0, 10 - $serpCount);
+                
+                if ($maxPaaQuestions === 0) {
+                    $paaQuestions = [];
+                    $task->update(['alsoasked_questions' => []]);
+                } elseif (count($paaQuestions) > $maxPaaQuestions) {
+                    $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
+                    $task->update(['alsoasked_questions' => $paaQuestions]);
+                }
             } else {
-                // AlsoAsked questions not present, fetch them
                 if (!empty($task->alsoasked_search_id) && is_string($task->alsoasked_search_id)) {
                     $searchResults = $alsoAskedService->getSearchResults($task->alsoasked_search_id);
 
                     if (!$searchResults) {
-                        // If SERP answers are ready, finalize with SERP only
                         $task->refresh();
                         if (!empty($task->serp_answers)) {
                             $this->finalizeTask($task, $faqGeneratorService, true);
@@ -98,6 +108,15 @@ class ProcessFaqTask implements ShouldQueue
                     if ($status === 'success' || $status === 'no_records') {
                         if ($status === 'success') {
                             $paaQuestions = $alsoAskedService->extractQuestions($searchResults);
+                            
+                            $serpCount = count($task->serp_questions ?? []);
+                            $maxPaaQuestions = max(0, 10 - $serpCount);
+                            
+                            if ($maxPaaQuestions === 0) {
+                                $paaQuestions = [];
+                            } elseif (count($paaQuestions) > $maxPaaQuestions) {
+                                $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
+                            }
                         }
                         $task->update(['alsoasked_questions' => $paaQuestions ?? []]);
                     } else {
@@ -161,6 +180,11 @@ class ProcessFaqTask implements ShouldQueue
             return;
         }
 
+        // Strictly limit SERP questions to max 10
+        if (count($serpQuestions) > 10) {
+            $serpQuestions = array_slice($serpQuestions, 0, 10);
+        }
+
         $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
         $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
 
@@ -191,7 +215,7 @@ class ProcessFaqTask implements ShouldQueue
         }
 
         try {
-            // Generate answers for SERP questions
+            // Generate answers for SERP questions (strictly limited to 10)
             $serpAnswers = $faqGeneratorService->generateAnswersForQuestions(
                 $serpQuestions,
                 $keyword,
@@ -222,6 +246,21 @@ class ProcessFaqTask implements ShouldQueue
             return;
         }
 
+        // Strictly limit PAA questions so total (SERP + PAA) = 10 max
+        $serpCount = count($task->serp_questions ?? []);
+        $paaCount = count($paaQuestions);
+        $maxPaaQuestions = max(0, 10 - $serpCount);
+        
+        if ($maxPaaQuestions === 0) {
+            // SERP already has 10 questions, don't process any PAA
+            return;
+        }
+        
+        if ($paaCount > $maxPaaQuestions) {
+            // Limit PAA questions to fit within 10 total
+            $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
+        }
+
         $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
         $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
 
@@ -234,7 +273,7 @@ class ProcessFaqTask implements ShouldQueue
         }
 
         try {
-            // Generate answers for PAA questions
+            // Generate answers for PAA questions (strictly limited to ensure total <= 10)
             $paaAnswers = $faqGeneratorService->generateAnswersForQuestions(
                 $paaQuestions,
                 $keyword,
