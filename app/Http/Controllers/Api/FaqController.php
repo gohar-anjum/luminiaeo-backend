@@ -109,23 +109,63 @@ class FaqController extends Controller
 
             $this->validateTaskOwnership($task);
 
-            // Get all questions (combined from SERP and AlsoAsked)
-            $allQuestions = $task->serp_questions ?? [];
+            // Get questions and answers from both sources
+            $serpQuestions = $task->serp_questions ?? [];
+            $serpAnswers = $task->serp_answers ?? [];
+            $paaQuestions = $task->alsoasked_questions ?? [];
+            $paaAnswers = $task->paa_answers ?? [];
             $questionKeywords = $task->question_keywords ?? [];
 
-            // Build questions array with keywords
+            // Build questions array with progressive answers
             $questions = [];
-            foreach ($allQuestions as $question) {
+            
+            // Add SERP questions with answers if available
+            foreach ($serpQuestions as $question) {
                 $questionData = [
                     'question' => $question,
                     'keywords' => $questionKeywords[$question] ?? [],
+                    'source' => 'serp',
                     'has_answer' => false,
                     'answer' => null,
                 ];
+                
+                // Check if answer exists in serp_answers
+                foreach ($serpAnswers as $answerItem) {
+                    if (isset($answerItem['question']) && 
+                        strtolower(trim($answerItem['question'])) === strtolower(trim($question))) {
+                        $questionData['has_answer'] = true;
+                        $questionData['answer'] = $answerItem['answer'] ?? null;
+                        break;
+                    }
+                }
+                
+                $questions[] = $questionData;
+            }
+            
+            // Add PAA questions with answers if available
+            foreach ($paaQuestions as $question) {
+                $questionData = [
+                    'question' => $question,
+                    'keywords' => $questionKeywords[$question] ?? [],
+                    'source' => 'paa',
+                    'has_answer' => false,
+                    'answer' => null,
+                ];
+                
+                // Check if answer exists in paa_answers
+                foreach ($paaAnswers as $answerItem) {
+                    if (isset($answerItem['question']) && 
+                        strtolower(trim($answerItem['question'])) === strtolower(trim($question))) {
+                        $questionData['has_answer'] = true;
+                        $questionData['answer'] = $answerItem['answer'] ?? null;
+                        break;
+                    }
+                }
+                
                 $questions[] = $questionData;
             }
 
-            // If completed, merge answers with questions
+            // If completed, also check final FAQ record for any missing answers
             if ($task->isCompleted() && $task->faq_id) {
                 $faq = \App\Models\Faq::find($task->faq_id);
                 if ($faq && !empty($faq->faqs)) {
@@ -137,12 +177,14 @@ class FaqController extends Controller
                         }
                     }
 
-                    // Match answers to questions
+                    // Fill in any missing answers
                     foreach ($questions as &$questionData) {
-                        $questionLower = strtolower(trim($questionData['question']));
-                        if (isset($answerMap[$questionLower])) {
-                            $questionData['has_answer'] = true;
-                            $questionData['answer'] = $answerMap[$questionLower];
+                        if (!$questionData['has_answer']) {
+                            $questionLower = strtolower(trim($questionData['question']));
+                            if (isset($answerMap[$questionLower])) {
+                                $questionData['has_answer'] = true;
+                                $questionData['answer'] = $answerMap[$questionLower];
+                            }
                         }
                     }
                     unset($questionData);
@@ -156,15 +198,15 @@ class FaqController extends Controller
             } elseif ($task->isFailed()) {
                 $progress = 0;
             } elseif ($task->isProcessing()) {
-                // If questions are available, we're at least 30% done
-                // If keywords are available, we're at least 60% done
-                // If processing, we're between 60-90%
-                if (!empty($allQuestions)) {
-                    if (!empty($questionKeywords)) {
-                        $progress = 70; // Keywords generated, generating answers
-                    } else {
-                        $progress = 40; // Questions available, generating keywords
-                    }
+                $hasSerpAnswers = !empty($serpAnswers);
+                $hasPaaAnswers = !empty($paaAnswers);
+                
+                if ($hasSerpAnswers && $hasPaaAnswers) {
+                    $progress = 100; // Both complete, just finalizing
+                } elseif ($hasSerpAnswers) {
+                    $progress = 50; // SERP answers ready, waiting for PAA
+                } elseif (!empty($serpQuestions)) {
+                    $progress = 30; // SERP questions available, generating answers
                 } else {
                     $progress = 10; // Initial processing
                 }
@@ -172,11 +214,12 @@ class FaqController extends Controller
                 $progress = 5; // Just started
             }
 
+            $totalQuestions = count($serpQuestions) + count($paaQuestions);
             $data = [
                 'status' => $task->status,
                 'progress' => $progress,
                 'questions' => $questions,
-                'total_questions' => count($allQuestions),
+                'total_questions' => $totalQuestions,
             ];
 
             if ($task->isFailed()) {

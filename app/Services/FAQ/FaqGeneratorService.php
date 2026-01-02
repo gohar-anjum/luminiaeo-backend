@@ -1415,21 +1415,24 @@ class FaqGeneratorService
                 }
             }
 
+            // Extract search keyword for context
+            $searchKeyword = $topic ?? ($url ? parse_url($url, PHP_URL_HOST) : '');
+            if ($searchKeyword && strpos($searchKeyword, 'www.') === 0) {
+                $searchKeyword = str_replace('www.', '', $searchKeyword);
+            }
+
             $task = \App\Models\FaqTask::create([
                 'user_id' => Auth::id(),
                 'url' => $url,
                 'topic' => $topic,
+                'search_keyword' => $searchKeyword,
                 'serp_questions' => $serpQuestions,
                 'alsoasked_search_id' => $alsoAskedSearchId,
                 'options' => $options,
                 'status' => $alsoAskedSearchId ? 'pending' : 'processing',
             ]);
 
-            if ($alsoAskedSearchId) {
-                \App\Jobs\ProcessFaqTask::dispatch($task->id)->delay(now()->addSeconds(2));
-            } else {
-                \App\Jobs\ProcessFaqTask::dispatch($task->id);
-            }
+            \App\Jobs\ProcessFaqTask::dispatch($task->id);
 
             return $task;
         });
@@ -1469,5 +1472,277 @@ class FaqGeneratorService
         $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
         $failures = Cache::increment($circuitBreakerKey . ':failures', 1);
         Cache::put($circuitBreakerKey . ':last_failure', now(), 600);
+    }
+
+    /**
+     * Generate answers for a specific set of questions with keyword context.
+     * Used for progressive answer generation (SERP and PAA separately).
+     */
+    public function generateAnswersForQuestions(
+        array $questions,
+        string $keyword,
+        ?string $url = null,
+        ?string $topic = null,
+        array $options = [],
+        array $topKeywords = []
+    ): array {
+        if (empty($questions)) {
+            return [];
+        }
+
+        $urlContent = null;
+        if ($url) {
+            $urlContentCacheKey = 'faq:url_content:' . md5($url);
+            $urlContent = Cache::remember($urlContentCacheKey, 3600, function () use ($url) {
+                return $this->fetchUrlContent($url);
+            });
+        }
+
+        $faqs = null;
+        $lastException = null;
+
+        // Try Gemini first
+        if ($this->shouldTryLLM('gemini')) {
+            try {
+                $faqs = $this->generateAnswersWithGemini(
+                    $questions,
+                    $keyword,
+                    $url,
+                    $topic,
+                    $urlContent,
+                    $options,
+                    $topKeywords
+                );
+                $this->recordLLMSuccess('gemini');
+            } catch (\Exception $geminiException) {
+                $lastException = $geminiException;
+                $this->recordLLMFailure('gemini');
+
+                // Try GPT fallback
+                if ($this->shouldTryLLM('gpt')) {
+                    try {
+                        $faqs = $this->generateAnswersWithGPT(
+                            $questions,
+                            $keyword,
+                            $url,
+                            $topic,
+                            $urlContent,
+                            $options,
+                            $topKeywords
+                        );
+                        $this->recordLLMSuccess('gpt');
+                    } catch (\Exception $gptException) {
+                        $lastException = $gptException;
+                        $this->recordLLMFailure('gpt');
+                        throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                    }
+                } else {
+                    throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                }
+            }
+        } else {
+            // Circuit breaker open for Gemini, try GPT
+            if ($this->shouldTryLLM('gpt')) {
+                try {
+                    $faqs = $this->generateAnswersWithGPT(
+                        $questions,
+                        $keyword,
+                        $url,
+                        $topic,
+                        $urlContent,
+                        $options,
+                        $topKeywords
+                    );
+                    $this->recordLLMSuccess('gpt');
+                } catch (\Exception $gptException) {
+                    $lastException = $gptException;
+                    $this->recordLLMFailure('gpt');
+                    throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                }
+            } else {
+                throw new \RuntimeException('All LLM APIs circuit breaker open.');
+            }
+        }
+
+        if (empty($faqs)) {
+            throw new \RuntimeException('Failed to generate answers: No FAQs generated');
+        }
+
+        return $faqs;
+    }
+
+    /**
+     * Generate answers using Gemini with keyword-focused prompt.
+     */
+    protected function generateAnswersWithGemini(
+        array $questions,
+        string $keyword,
+        ?string $url,
+        ?string $topic,
+        ?string $urlContent,
+        array $options,
+        array $topKeywords = []
+    ): array {
+        $config = config('citations.gemini');
+
+        if (empty($config['api'])) {
+            throw new \RuntimeException('Gemini API key is not configured.');
+        }
+
+        $prompt = $this->buildKeywordFocusedPrompt($questions, $keyword, $url, $topic, $urlContent, $topKeywords);
+
+        $payload = [
+            'contents' => [
+                [
+                    'parts' => [
+                        ['text' => $prompt],
+                    ],
+                ],
+            ],
+            'generationConfig' => [
+                'temperature' => $options['temperature'] ?? 0.9,
+                'responseMimeType' => 'application/json',
+                'maxOutputTokens' => 8000,
+            ],
+        ];
+
+        $model = $config['model'] ?? 'gemini-1.5-pro';
+        $apiKey = $config['api'];
+        $endpoint = sprintf(
+            'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s',
+            $model,
+            $apiKey
+        );
+
+        try {
+            $response = Http::timeout($config['timeout'] ?? 60)
+                ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
+                ->post($endpoint, $payload);
+
+            if ($response->failed()) {
+                throw new \RuntimeException('Gemini API error: ' . $response->body());
+            }
+
+            $responseData = $response->json();
+            $text = $this->extractTextFromGeminiResponse($responseData);
+            
+            $faqs = $this->parseFaqResponse($text);
+
+            return $this->validateAndFormatFaqs($faqs, count($questions), $topKeywords);
+
+        } catch (\Exception $e) {
+            throw new \RuntimeException('Failed to generate answers with Gemini: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Generate answers using GPT with keyword-focused prompt.
+     */
+    protected function generateAnswersWithGPT(
+        array $questions,
+        string $keyword,
+        ?string $url,
+        ?string $topic,
+        ?string $urlContent,
+        array $options,
+        array $topKeywords = []
+    ): array {
+        $config = config('citations.openai');
+
+        if (empty($config['api_key'])) {
+            throw new \RuntimeException('OpenAI API key is not configured.');
+        }
+
+        $prompt = $this->buildKeywordFocusedPrompt($questions, $keyword, $url, $topic, $urlContent, $topKeywords);
+
+        $messages = [
+            [
+                'role' => 'system',
+                'content' => 'You are an expert at creating comprehensive FAQ content. Always respond with valid JSON array format.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $prompt,
+            ],
+        ];
+
+        $payload = [
+            'model' => $config['model'] ?? 'gpt-4o',
+            'temperature' => $options['temperature'] ?? 0.9,
+            'response_format' => ['type' => 'json_object'],
+            'messages' => $messages,
+        ];
+
+        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions';
+
+        try {
+            $response = Http::withToken($config['api_key'])
+                ->timeout($config['timeout'] ?? 60)
+                ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
+                ->post($endpoint, $payload);
+
+            if ($response->failed()) {
+                throw new \RuntimeException('OpenAI API error: ' . $response->body());
+            }
+
+            $responseData = $response->json();
+            $text = $this->extractTextFromGPTResponse($responseData);
+            
+            $faqs = $this->parseFaqResponse($text);
+
+            return $this->validateAndFormatFaqs($faqs, count($questions), $topKeywords);
+
+        } catch (\Exception $e) {
+            throw new \RuntimeException('Failed to generate answers with GPT: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Build a keyword-focused prompt for answering questions.
+     */
+    protected function buildKeywordFocusedPrompt(
+        array $questions,
+        string $keyword,
+        ?string $url,
+        ?string $topic,
+        ?string $urlContent,
+        array $topKeywords = []
+    ): string {
+        $contextSection = "Context: Generate answers for the following questions related to the keyword: \"{$keyword}\"\n\n";
+
+        if ($topic) {
+            $contextSection .= "Topic/Subject: {$topic}\n\n";
+        }
+
+        if ($url) {
+            $contextSection .= "Target URL: {$url}\n";
+            if ($urlContent) {
+                $urlContent = mb_substr($urlContent, 0, 3000);
+                $contextSection .= "Website Content (for context):\n{$urlContent}\n\n";
+            }
+        }
+
+        $questionsList = implode("\n", array_map(function ($question, $index) {
+            return ($index + 1) . ". " . $question;
+        }, $questions, array_keys($questions)));
+
+        $prompt = $contextSection;
+        $prompt .= "Questions:\n{$questionsList}\n\n";
+        $prompt .= "Requirements:\n";
+        $prompt .= "- Answers should be keyword-focused and SEO-optimized\n";
+        $prompt .= "- Each answer should be comprehensive but concise\n";
+        $prompt .= "- Answers should be suitable for FAQ schema markup\n";
+        $prompt .= "- Maintain consistency in tone and style\n";
+        $prompt .= "- Focus on the keyword: \"{$keyword}\" when relevant\n";
+
+        if (!empty($topKeywords) && is_array($topKeywords)) {
+            $keywordsList = implode(', ', array_slice($topKeywords, 0, 10));
+            $prompt .= "\nSEO Keywords to incorporate naturally: {$keywordsList}\n";
+        }
+
+        $prompt .= "\nPlease provide answers in JSON format as an array of objects with 'question' and 'answer' fields.\n";
+        $prompt .= "Example format: [{\"question\": \"Question text\", \"answer\": \"Answer text\"}, ...]\n";
+
+        return $prompt;
     }
 }

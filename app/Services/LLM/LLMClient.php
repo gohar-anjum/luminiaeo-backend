@@ -153,7 +153,61 @@ class LLMClient
             try {
                 $raw = $this->sendWithProvider($provider, $messages, ['temperature' => 0.1]);
                 $text = $this->extractTextFromRaw($raw, $provider);
+                
+                // Log the complete raw response from LLM
+                Log::info('Citation batch validation - Complete LLM Response', [
+                    'provider' => $provider,
+                    'target_url' => $targetUrl,
+                    'target_domain' => $targetDomain,
+                    'chunk_size' => count($chunk),
+                    'queries' => $chunk,
+                    'response_length' => strlen($text),
+                    'raw_response_text' => $text,
+                    'raw_response_json' => $raw,
+                ]);
+                
                 $parsed = $this->parseCitationBatchResponse($text, $chunk, $targetDomain, $alias);
+                
+                // Log parsed results with URL information
+                $totalUrls = 0;
+                $queriesWithUrls = 0;
+                $queriesWithCitations = 0;
+                foreach ($parsed as $index => $result) {
+                    $urlCount = count($result['citation_references'] ?? []);
+                    $hasCitation = $result['citation_found'] ?? false;
+                    
+                    if ($urlCount > 0) {
+                        $totalUrls += $urlCount;
+                        $queriesWithUrls++;
+                    }
+                    if ($hasCitation) {
+                        $queriesWithCitations++;
+                    }
+                    
+                    Log::info('Citation batch validation - Parsed Result', [
+                        'provider' => $provider,
+                        'query_index' => $index,
+                        'query' => $chunk[$index] ?? 'unknown',
+                        'citation_found' => $hasCitation,
+                        'confidence' => $result['confidence'] ?? 0,
+                        'urls_received' => $urlCount,
+                        'urls' => $result['citation_references'] ?? [],
+                        'has_urls' => $urlCount > 0,
+                        'full_result' => $result,
+                    ]);
+                }
+                
+                Log::info('Citation batch validation - Summary', [
+                    'provider' => $provider,
+                    'target_url' => $targetUrl,
+                    'chunk_size' => count($chunk),
+                    'total_queries' => count($parsed),
+                    'queries_with_citations' => $queriesWithCitations,
+                    'queries_with_urls' => $queriesWithUrls,
+                    'total_urls_received' => $totalUrls,
+                    'avg_urls_per_query' => count($chunk) > 0 ? round($totalUrls / count($chunk), 2) : 0,
+                ]);
+                
                 $results = array_replace($results, $parsed);
                 $this->breaker->clearFailures($provider);
             } catch (\Throwable $e) {
@@ -313,21 +367,52 @@ class LLMClient
             }
         }
 
+        Log::info('Parsing citation batch response', [
+            'provider' => $providerAlias,
+            'target_domain' => $targetDomain,
+            'entries_found' => count($entries),
+            'chunk_size' => count($chunk),
+            'json_extracted' => $json !== $text,
+        ]);
+
         $mapped = [];
         foreach ($entries as $entry) {
             $index = $entry['index'] ?? $this->matchQueryIndex($entry['query'] ?? null, $chunk);
             if ($index === null) {
+                Log::warning('Citation batch entry missing index', [
+                    'provider' => $providerAlias,
+                    'entry' => $entry,
+                ]);
                 continue;
             }
 
+            // Extract URLs from entry
+            $rawUrls = (array) ($entry['target_urls'] ?? $entry['citation_references'] ?? []);
             $refs = array_values(array_filter(
-                (array) ($entry['target_urls'] ?? $entry['citation_references'] ?? []),
+                $rawUrls,
                 fn ($url) => $targetDomain ? $this->isTargetDomain($this->normalizeDomain($url), $targetDomain) : true
             ));
 
+            $citationFound = (bool) ($entry['target_cited'] ?? $entry['citation_found'] ?? false);
+            
+            // Log each entry's URL information
+            Log::info('Citation batch entry parsed', [
+                'provider' => $providerAlias,
+                'query_index' => $index,
+                'query' => $chunk[$index] ?? 'unknown',
+                'citation_found' => $citationFound,
+                'confidence' => (float) ($entry['confidence'] ?? 0),
+                'raw_urls_count' => count($rawUrls),
+                'raw_urls' => $rawUrls,
+                'filtered_urls_count' => count($refs),
+                'filtered_urls' => $refs,
+                'target_domain' => $targetDomain,
+                'urls_filtered_out' => count($rawUrls) - count($refs),
+            ]);
+
             $mapped[$index] = [
                 'provider' => $providerAlias,
-                'citation_found' => (bool) ($entry['target_cited'] ?? $entry['citation_found'] ?? false),
+                'citation_found' => $citationFound,
                 'confidence' => (float) ($entry['confidence'] ?? 0),
                 'citation_references' => $refs,
                 'competitors' => $this->normalizeCompetitors($entry['competitors'] ?? [], $targetDomain),
@@ -338,6 +423,11 @@ class LLMClient
 
         foreach ($chunk as $index => $query) {
             if (!isset($mapped[$index])) {
+                Log::warning('Citation batch entry missing for query', [
+                    'provider' => $providerAlias,
+                    'query_index' => $index,
+                    'query' => $query,
+                ]);
                 $mapped[$index] = $this->defaultCitationResult($providerAlias, $query, 'Unable to parse provider response');
             }
         }

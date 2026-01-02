@@ -38,184 +38,294 @@ class ProcessFaqTask implements ShouldQueue
         $task->markAsProcessing();
 
         try {
-            $input = $task->url ?? $task->topic ?? '';
-            $sourceHash = $faqGeneratorService->getSourceHash($input, $task->options ?? []);
-            
-            $existingFaq = $faqGeneratorService->findExistingFaq($input, $task->options ?? []);
-            
-            if ($existingFaq) {
-                $faqGeneratorService->incrementApiCallsSaved($existingFaq->id);
-                $existingFaq->refresh();
+            // Ensure search_keyword is set (extract from topic or URL)
+            if (empty($task->search_keyword)) {
+                $searchKeyword = $task->topic ?? ($task->url ? parse_url($task->url, PHP_URL_HOST) : '');
+                if ($searchKeyword) {
+                    $task->update(['search_keyword' => $searchKeyword]);
+                }
+            }
+            $keyword = $task->search_keyword ?? $task->topic ?? '';
 
-                $task->markAsCompleted($existingFaq->id);
-                return;
+            // PHASE 1: Process SERP questions immediately if not already processed
+            if (!empty($task->serp_questions) && empty($task->serp_answers)) {
+                $this->processSerpQuestions($task, $faqGeneratorService, $keyword);
+                // Refresh task to get updated serp_answers
+                $task->refresh();
             }
 
-              if (!empty($task->alsoasked_questions) && is_array($task->alsoasked_questions)) {
-                $existingFaq = $faqGeneratorService->findExistingFaq($input, $task->options ?? []);
-                if ($existingFaq) {
-                    $faqGeneratorService->incrementApiCallsSaved($existingFaq->id);
-                    $existingFaq->refresh();
-
-                    $task->markAsCompleted($existingFaq->id);
-                    return;
-                }
-
-                // Use existing AlsoAsked questions from task, skip API call
-                $alsoAskedQuestions = $task->alsoasked_questions;
+            // PHASE 2: Check for PAA (AlsoAsked) questions
+            $paaQuestions = null;
+            
+            if (!empty($task->alsoasked_questions) && is_array($task->alsoasked_questions)) {
+                // Use existing AlsoAsked questions from task
+                $paaQuestions = $task->alsoasked_questions;
             } else {
                 // AlsoAsked questions not present, fetch them
-                $alsoAskedQuestions = [];
-                
                 if (!empty($task->alsoasked_search_id) && is_string($task->alsoasked_search_id)) {
                     $searchResults = $alsoAskedService->getSearchResults($task->alsoasked_search_id);
 
                     if (!$searchResults) {
+                        // If SERP answers are ready, finalize with SERP only
+                        $task->refresh();
+                        if (!empty($task->serp_answers)) {
+                            $this->finalizeTask($task, $faqGeneratorService, true);
+                            return;
+                        }
                         throw new \RuntimeException('Failed to get AlsoAsked search results');
                     }
 
                     $status = $searchResults['status'] ?? 'unknown';
 
                     if ($status === 'running') {
+                        // Refresh task to check if SERP answers are ready
+                        $task->refresh();
+                        
+                        // If SERP answers are ready, don't finalize yet - just make them available
+                        // Continue waiting for PAA, then finalize with both
+                        if (!empty($task->serp_answers)) {
+                            // SERP answers are ready and available via status endpoint
+                            // Continue waiting for PAA, then finalize with both
+                            dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
+                            return;
+                        }
+                        
+                        // No SERP answers yet, continue waiting for both
                         dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
                         return;
                     }
 
                     if ($status === 'success' || $status === 'no_records') {
                         if ($status === 'success') {
-                            $alsoAskedQuestions = $alsoAskedService->extractQuestions($searchResults);
+                            $paaQuestions = $alsoAskedService->extractQuestions($searchResults);
                         }
-                        $task->update(['alsoasked_questions' => $alsoAskedQuestions]);
+                        $task->update(['alsoasked_questions' => $paaQuestions ?? []]);
                     } else {
+                        // Refresh task to check if SERP answers are ready
+                        $task->refresh();
+                        
+                        // If SERP answers are ready, finalize with SERP only
+                        if (!empty($task->serp_answers)) {
+                            $this->finalizeTask($task, $faqGeneratorService, true);
+                            return;
+                        }
                         dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
                         return;
                     }
                 }
             }
 
-            // Process FAQs with SERP questions and (if available) AlsoAsked questions
-            $allQuestions = $faqGeneratorService->combineQuestions(
-                $task->serp_questions ?? [],
-                $alsoAskedQuestions
-            );
-
-            if (empty($allQuestions)) {
-                $task->markAsFailed('No questions available after combining SERP and AlsoAsked results');
-                return;
+            // PHASE 2: Process PAA questions if available and not already processed
+            if (!empty($paaQuestions) && empty($task->paa_answers)) {
+                $this->processPaaQuestions($task, $faqGeneratorService, $keyword, $paaQuestions);
+                // Refresh task to get updated paa_answers
+                $task->refresh();
             }
 
-            // Save combined questions immediately so frontend can display them
-            // This happens as soon as AlsoAsked response is received
-            $task->update(['serp_questions' => $allQuestions]);
-
-            $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
-            $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
-
-            $topKeywords = [];
-            $hasValidKeywords = false;
+            // Finalize task - combine all answers and store
+            // Refresh one more time to ensure we have latest data
+            $task->refresh();
             
-            if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
-                if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords']) && !empty($task->question_keywords['top_keywords'])) {
-                    $topKeywords = $task->question_keywords['top_keywords'];
-                    $hasValidKeywords = true;
-                }
+            // Only finalize if we have at least SERP answers
+            // If PAA is still pending, we'll finalize with SERP only
+            if (!empty($task->serp_answers) || !empty($task->paa_answers)) {
+                $this->finalizeTask($task, $faqGeneratorService, true);
+            } else {
+                // No answers yet, wait a bit more
+                dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
             }
-            
-            if (!$hasValidKeywords) {
-                try {
-                    $topKeywords = $faqGeneratorService->fetchKeywordsForTopic(
-                        $task->topic,
-                        $languageCode,
-                        $locationCode
-                    );
-                    
-                    if (!empty($topKeywords)) {
-                        $task->update(['question_keywords' => ['top_keywords' => $topKeywords]]);
-                    }
-                } catch (\Exception $keywordException) {
-                    $topKeywords = [];
-                }
-            }
-
-            $urlContent = null;
-            if ($task->url) {
-                $urlContent = $faqGeneratorService->fetchUrlContent($task->url);
-            }
-
-            // Try Gemini first, then GPT, then SERP fallback
-            $faqs = null;
-            $lastException = null;
-
-            // Try Gemini
-            try {
-                $faqs = $faqGeneratorService->generateFaqsWithGemini(
-                    $task->url,
-                    $task->topic,
-                    $urlContent,
-                    $allQuestions,
-                    $task->options ?? [],
-                    $topKeywords
-                );
-            } catch (\Exception $geminiException) {
-                $lastException = $geminiException;
-
-                // Try GPT fallback
-                try {
-                    $faqs = $faqGeneratorService->generateFaqsWithGPT(
-                        $task->url,
-                        $task->topic,
-                        $urlContent,
-                        $allQuestions,
-                        $task->options ?? [],
-                        $topKeywords
-                    );
-                } catch (\Exception $gptException) {
-                    $lastException = $gptException;
-
-                    // Final fallback to SERP response
-                    $serpResponse = $faqGeneratorService->fetchSerpResponse(
-                        $task->url,
-                        $task->topic
-                    );
-
-                    if ($serpResponse && !empty($serpResponse)) {
-                        $faqs = $faqGeneratorService->generateFaqsFromSerpResponse(
-                            $task->url,
-                            $task->topic,
-                            $serpResponse
-                        );
-
-                        if (empty($faqs)) {
-                            throw new \RuntimeException('Failed to generate FAQs from SERP response: No FAQs extracted');
-                        }
-                    } else {
-                        // If all fallbacks fail, throw the last exception
-                        throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
-                    }
-                }
-            }
-
-            if (empty($faqs)) {
-                throw new \RuntimeException('Failed to generate FAQs: No FAQs generated from any source');
-            }
-
-            // Source hash already calculated above, reuse it
-            $faqRecord = $faqGeneratorService->storeFaqsInDatabase(
-                $task->url,
-                $task->topic,
-                $faqs,
-                $task->options ?? [],
-                $sourceHash
-            );
-
-            if (!$faqRecord || !$faqRecord->id) {
-                throw new \RuntimeException('Failed to store FAQs: Invalid FAQ record returned');
-            }
-
-            $task->markAsCompleted($faqRecord->id);
 
         } catch (\Exception $e) {
-            $task->markAsFailed($e->getMessage());
+            // If we have SERP answers, don't fail completely - just log the error and finalize
+            $task->refresh();
+            if (!empty($task->serp_answers)) {
+                \Illuminate\Support\Facades\Log::error('PAA processing error but SERP answers available: ' . $e->getMessage());
+                $this->finalizeTask($task, $faqGeneratorService, true);
+            } else {
+                $task->markAsFailed($e->getMessage());
+            }
         }
+    }
+
+    /**
+     * Process SERP questions and generate answers immediately.
+     */
+    protected function processSerpQuestions(
+        FaqTask $task,
+        FaqGeneratorService $faqGeneratorService,
+        string $keyword
+    ): void {
+        $serpQuestions = $task->serp_questions ?? [];
+        
+        if (empty($serpQuestions)) {
+            return;
+        }
+
+        $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
+        $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
+
+        // Get top keywords if not already available
+        $topKeywords = [];
+        if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
+            if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords'])) {
+                $topKeywords = $task->question_keywords['top_keywords'];
+            }
+        }
+
+        if (empty($topKeywords) && $task->topic) {
+            try {
+                $topKeywords = $faqGeneratorService->fetchKeywordsForTopic(
+                    $task->topic,
+                    $languageCode,
+                    $locationCode
+                );
+                
+                if (!empty($topKeywords)) {
+                    $currentKeywords = $task->question_keywords ?? [];
+                    $currentKeywords['top_keywords'] = $topKeywords;
+                    $task->update(['question_keywords' => $currentKeywords]);
+                }
+            } catch (\Exception $e) {
+                // Continue without keywords
+            }
+        }
+
+        try {
+            // Generate answers for SERP questions
+            $serpAnswers = $faqGeneratorService->generateAnswersForQuestions(
+                $serpQuestions,
+                $keyword,
+                $task->url,
+                $task->topic,
+                $task->options ?? [],
+                $topKeywords
+            );
+
+            // Store SERP answers immediately
+            $task->update(['serp_answers' => $serpAnswers]);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to generate SERP answers: ' . $e->getMessage());
+            // Don't throw - allow PAA processing to continue
+        }
+    }
+
+    /**
+     * Process PAA (People Also Asked) questions and generate answers.
+     */
+    protected function processPaaQuestions(
+        FaqTask $task,
+        FaqGeneratorService $faqGeneratorService,
+        string $keyword,
+        array $paaQuestions
+    ): void {
+        if (empty($paaQuestions)) {
+            return;
+        }
+
+        $languageCode = $task->options['language_code'] ?? config('services.faq.default_language', 'en');
+        $locationCode = $task->options['location_code'] ?? config('services.faq.default_location', 2840);
+
+        // Get top keywords if not already available
+        $topKeywords = [];
+        if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
+            if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords'])) {
+                $topKeywords = $task->question_keywords['top_keywords'];
+            }
+        }
+
+        try {
+            // Generate answers for PAA questions
+            $paaAnswers = $faqGeneratorService->generateAnswersForQuestions(
+                $paaQuestions,
+                $keyword,
+                $task->url,
+                $task->topic,
+                $task->options ?? [],
+                $topKeywords
+            );
+
+            // Store PAA answers
+            $task->update(['paa_answers' => $paaAnswers]);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to generate PAA answers: ' . $e->getMessage());
+            // Don't throw - we already have SERP answers
+        }
+    }
+
+    /**
+     * Finalize task by combining all answers and storing in database.
+     * Can be called with SERP answers only, or with both SERP and PAA answers.
+     */
+    protected function finalizeTask(
+        FaqTask $task,
+        FaqGeneratorService $faqGeneratorService,
+        bool $allowPartial = true
+    ): void {
+        // Refresh task to get latest data
+        $task->refresh();
+        
+        $input = $task->url ?? $task->topic ?? '';
+        $sourceHash = $faqGeneratorService->getSourceHash($input, $task->options ?? []);
+        
+        // Check for existing FAQ
+        $existingFaq = $faqGeneratorService->findExistingFaq($input, $task->options ?? []);
+        if ($existingFaq && $task->isCompleted()) {
+            $faqGeneratorService->incrementApiCallsSaved($existingFaq->id);
+            $existingFaq->refresh();
+            return;
+        }
+
+        // Combine SERP and PAA answers
+        $allFaqs = [];
+        
+        // Add SERP answers with source indicator
+        if (!empty($task->serp_answers) && is_array($task->serp_answers)) {
+            foreach ($task->serp_answers as $faq) {
+                $faq['source'] = 'serp';
+                $allFaqs[] = $faq;
+            }
+        }
+        
+        // Add PAA answers with source indicator
+        if (!empty($task->paa_answers) && is_array($task->paa_answers)) {
+            foreach ($task->paa_answers as $faq) {
+                $faq['source'] = 'paa';
+                $allFaqs[] = $faq;
+            }
+        }
+
+        if (empty($allFaqs)) {
+            if (!$allowPartial) {
+                throw new \RuntimeException('No answers generated from any source');
+            }
+            // If allowing partial and no answers yet, just return (don't fail)
+            return;
+        }
+
+        // If task already has an FAQ record, update it instead of creating new one
+        if ($task->faq_id) {
+            $existingFaq = \App\Models\Faq::find($task->faq_id);
+            if ($existingFaq) {
+                // Update existing FAQ with combined answers
+                $existingFaq->update(['faqs' => $allFaqs]);
+                $task->markAsCompleted($existingFaq->id);
+                return;
+            }
+        }
+
+        // Store combined FAQs in database
+        $faqRecord = $faqGeneratorService->storeFaqsInDatabase(
+            $task->url,
+            $task->topic,
+            $allFaqs,
+            $task->options ?? [],
+            $sourceHash
+        );
+
+        if (!$faqRecord || !$faqRecord->id) {
+            throw new \RuntimeException('Failed to store FAQs: Invalid FAQ record returned');
+        }
+
+        $task->markAsCompleted($faqRecord->id);
     }
 }
