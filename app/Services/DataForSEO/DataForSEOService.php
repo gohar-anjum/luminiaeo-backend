@@ -678,14 +678,22 @@ class DataForSEOService
 
         $payload = [$taskPayload];
 
+        // Path is relative to base_url (https://api.dataforseo.com/v3) → no leading /v3
+        $path = '/dataforseo_labs/google/keyword_ideas/live';
+
+        Log::debug('DataForSEO Labs keyword_ideas request', [
+            'url' => $this->baseUrl . $path,
+            'body' => $payload,
+        ]);
+
         try {
             $httpResponse = $this->client()
-                ->post('/v3/dataforseo_labs/google/keyword_ideas/live', $payload)
+                ->post($path, $payload)
                 ->throw();
 
             $response = $httpResponse->json();
 
-            Log::info('DataForSEO Labs keyword_ideas response', [
+            Log::debug('DataForSEO Labs keyword_ideas response', [
                 'response' => $response,
                 'status' => $httpResponse->status(),
                 'seeds' => $keywordsArray,
