@@ -55,6 +55,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/ideas', [KeywordPlannerController::class, 'getKeywordIdeas'])
             ->name('keyword-planner.ideas');
 
+        Route::post('/informational-ideas', [KeywordPlannerController::class, 'getInformationalKeywordIdeas'])
+            ->name('keyword-planner.informational-ideas');
+
         Route::post('/for-site', [KeywordPlannerController::class, 'getKeywordsForSite'])
             ->name('keyword-planner.for-site');
 

@@ -8,6 +8,7 @@ use App\Http\Requests\KeywordsForSitePlannerRequest;
 use App\Services\Google\KeywordPlannerService;
 use App\Services\DataForSEO\DataForSEOService;
 use App\Services\Keyword\CombinedKeywordService;
+use App\Services\Keyword\InformationalKeywordService;
 use App\Services\Keyword\SemanticClusteringService;
 use App\Services\ApiResponseModifier;
 use Illuminate\Http\Request;
@@ -19,6 +20,7 @@ class KeywordPlannerController extends Controller
     private KeywordPlannerService $keywordPlannerService;
     private DataForSEOService $dataForSEOService;
     private CombinedKeywordService $combinedKeywordService;
+    private InformationalKeywordService $informationalKeywordService;
     private SemanticClusteringService $clusteringService;
     private ApiResponseModifier $responseModifier;
 
@@ -26,12 +28,14 @@ class KeywordPlannerController extends Controller
         KeywordPlannerService $keywordPlannerService,
         DataForSEOService $dataForSEOService,
         CombinedKeywordService $combinedKeywordService,
+        InformationalKeywordService $informationalKeywordService,
         SemanticClusteringService $clusteringService,
         ApiResponseModifier $responseModifier
     ) {
         $this->keywordPlannerService = $keywordPlannerService;
         $this->dataForSEOService = $dataForSEOService;
         $this->combinedKeywordService = $combinedKeywordService;
+        $this->informationalKeywordService = $informationalKeywordService;
         $this->clusteringService = $clusteringService;
         $this->responseModifier = $responseModifier;
     }
@@ -46,6 +50,76 @@ class KeywordPlannerController extends Controller
             'count' => count($ideas),
             'data' => $ideas,
         ]);
+    }
+
+    /**
+     * Get top informational keyword ideas: DataForSEO Labs (keyword_ideas, filter=informational, limit 1000)
+     * → keyword-intent microservice ranks by informational intent → returns top 100.
+     */
+    public function getInformationalKeywordIdeas(Request $request)
+    {
+        $request->validate([
+            'keywords' => 'required_without:keyword|array',
+            'keywords.*' => 'string|max:255',
+            'keyword' => 'required_without:keywords|string|max:255',
+            'location_code' => 'sometimes|integer|min:1',
+            'language_code' => 'sometimes|string|size:2',
+            'limit' => 'sometimes|integer|min:1|max:1000',
+            'top_n' => 'sometimes|integer|min:1|max:100',
+        ]);
+
+        $keywords = $request->filled('keywords')
+            ? $request->input('keywords')
+            : [$request->input('keyword')];
+
+        $keywords = array_values(array_filter(array_map('trim', $keywords), fn ($s) => $s !== ''));
+
+        if (empty($keywords)) {
+            return $this->responseModifier
+                ->setMessage('At least one keyword is required.')
+                ->setResponseCode(422)
+                ->response();
+        }
+
+        try {
+            $result = $this->informationalKeywordService->getTopInformationalKeywords($keywords, [
+                'location_code' => $request->input('location_code', 2840),
+                'language_code' => $request->input('language_code', 'en'),
+                'limit' => $request->input('limit', 1000),
+                'top_n' => $request->input('top_n', 100),
+            ]);
+
+            $data = array_map(fn ($dto) => $dto->toArray(), $result);
+
+            return $this->responseModifier
+                ->setData([
+                    'keywords' => $data,
+                    'total_count' => count($data),
+                ])
+                ->setMessage('Top informational keyword ideas retrieved successfully.')
+                ->response();
+        } catch (DataForSEOException $e) {
+            Log::error('DataForSEO error in informational keyword ideas', [
+                'error' => $e->getMessage(),
+                'keywords' => $keywords,
+            ]);
+
+            return $this->responseModifier
+                ->setMessage('DataForSEO API error: ' . $e->getMessage())
+                ->setResponseCode($e->getStatusCode() ?? 500)
+                ->response();
+        } catch (\Exception $e) {
+            Log::error('Unexpected error in informational keyword ideas', [
+                'error' => $e->getMessage(),
+                'keywords' => $keywords,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return $this->responseModifier
+                ->setMessage('An unexpected error occurred. Please try again.')
+                ->setResponseCode(500)
+                ->response();
+        }
     }
 
     public function getKeywordsForSite(KeywordsForSitePlannerRequest $request)

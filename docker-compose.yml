@@ -68,6 +68,7 @@ services:
       # Override service URLs to use Docker service names
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
+      - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
 
   # Nginx Web Server
   nginx:
@@ -117,6 +118,7 @@ services:
       # Override service URLs to use Docker service names
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
+      - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
 
   # Laravel Horizon (Queue Dashboard & Supervisor)
   horizon:
@@ -149,6 +151,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
+      - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
 
   # Keyword Clustering Service (Python)
   clustering:
@@ -194,6 +197,24 @@ services:
       - training
     # Command will be overridden when running training
     command: ["echo", "Use: docker-compose run --rm clustering-train python train_model_complete.py /app/data/training_pairs.json"]
+
+  # Keyword Intent Service (Python / spaCy – top 100 informational from DataForSEO Labs)
+  keyword-intent:
+    build:
+      context: ./keyword-intent-service
+      dockerfile: Dockerfile
+    container_name: luminiaeo_keyword_intent
+    restart: unless-stopped
+    ports:
+      - "${KEYWORD_INTENT_PORT:-8003}:8002"
+    networks:
+      - luminiaeo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # PBN Detector Service (Python)
   pbn-detector:

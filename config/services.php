@@ -99,6 +99,11 @@ return [
         'timeout' => env('KEYWORD_CLUSTERING_TIMEOUT', 120),
     ],
 
+    'keyword_intent' => [
+        'url' => env('KEYWORD_INTENT_SERVICE_URL', 'http://localhost:8002'),
+        'timeout' => env('KEYWORD_INTENT_SERVICE_TIMEOUT', 60),
+    ],
+
     'serp' => [
         'base_url' => env('SERP_API_BASE_URL', 'https://serpapi.com'),
         'api_key' => env('SERP_API_KEY'),

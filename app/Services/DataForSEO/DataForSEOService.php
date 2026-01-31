@@ -636,12 +636,19 @@ class DataForSEOService
         }
     }
 
+    /**
+     * Fetch keyword ideas from DataForSEO Labs (keyword_ideas/live).
+     * Supports optional filters e.g. [['search_intent_info.main_intent', '=', 'informational']].
+     *
+     * @param  array<int, array<string, mixed>>  $filters  Optional filters, e.g. [['search_intent_info.main_intent', '=', 'informational']]
+     */
     public function getKeywordIdeasFromLabs(
         string|array $keywords,
         string $languageCode = 'en',
         int $locationCode = 2840,
-        int $limit = 20,
-        bool $includeSerpInfo = true
+        int $limit = 1000,
+        bool $includeSerpInfo = true,
+        array $filters = []
     ): array {
         $this->ensureConfigured();
 
@@ -650,23 +657,26 @@ class DataForSEOService
         }
 
         $keywordsArray = is_array($keywords) ? $keywords : [$keywords];
-        
+
         if (empty($keywordsArray)) {
             throw new InvalidArgumentException('Keywords cannot be empty');
         }
 
-        $payload = [
-            [
-                'keywords' => $keywordsArray,
-                'location_code' => (int) $locationCode,
-                'language_code' => $languageCode,
-                'include_serp_info' => $includeSerpInfo,
-                'limit' => min($limit, 1000),
-                // 'filters' => [
-                //     ['search_intent_info.main_intent', '=', 'informational']
-                // ]
-            ]
+        $maxLimit = config('services.dataforseo.keyword_ideas.max_limit', 1000);
+        $limit = min($limit, $maxLimit);
+
+        $taskPayload = [
+            'keywords' => array_values($keywordsArray),
+            'location_code' => (int) $locationCode,
+            'language_code' => $languageCode,
+            'include_serp_info' => $includeSerpInfo,
+            'limit' => $limit,
         ];
+        if ($filters !== []) {
+            $taskPayload['filters'] = $filters;
+        }
+
+        $payload = [$taskPayload];
 
         try {
             $httpResponse = $this->client()
@@ -674,6 +684,12 @@ class DataForSEOService
                 ->throw();
 
             $response = $httpResponse->json();
+
+            Log::info('DataForSEO Labs keyword_ideas response', [
+                'response' => $response,
+                'status' => $httpResponse->status(),
+                'seeds' => $keywordsArray,
+            ]);
 
             if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
                 $this->recordAPIFailure();
@@ -697,12 +713,13 @@ class DataForSEOService
                 return [];
             }
 
-            $items = $task['result'] ?? [];
-            
+            $resultBlock = $task['result'][0] ?? null;
+            $items = is_array($resultBlock) ? ($resultBlock['items'] ?? []) : [];
+
             if (!is_array($items)) {
                 $items = [];
             }
-            
+
             if (!empty($items) && isset($items['keyword']) && !isset($items[0])) {
                 $items = [$items];
             }
@@ -718,15 +735,26 @@ class DataForSEOService
                     continue;
                 }
 
-                $keywordValue = isset($item['keyword']) ? trim((string)$item['keyword']) : '';
-                
+                $keywordValue = isset($item['keyword']) ? trim((string) $item['keyword']) : '';
+
                 if (empty($keywordValue)) {
                     continue;
                 }
 
+                $keywordInfo = $item['keyword_info'] ?? [];
+                $searchVolume = $keywordInfo['search_volume'] ?? null;
+                if ($searchVolume === null && !empty($keywordInfo['monthly_searches']) && is_array($keywordInfo['monthly_searches'])) {
+                    $first = $keywordInfo['monthly_searches'][0] ?? null;
+                    $searchVolume = $first['search_volume'] ?? null;
+                }
+                if ($searchVolume !== null) {
+                    $searchVolume = (int) $searchVolume;
+                }
+
                 $competitionValue = null;
-                if (isset($item['competition'])) {
-                    $comp = strtoupper((string) $item['competition']);
+                $compSource = $item['competition'] ?? $keywordInfo['competition_level'] ?? $keywordInfo['competition'] ?? null;
+                if ($compSource !== null) {
+                    $comp = strtoupper((string) $compSource);
                     $competitionValue = match ($comp) {
                         'HIGH' => 1.0,
                         'MEDIUM' => 0.5,
@@ -734,22 +762,29 @@ class DataForSEOService
                         default => null,
                     };
                 }
-                
-                if ($competitionValue === null && isset($item['competition_index'])) {
-                    $competitionValue = (float) $item['competition_index'] / 100.0;
+                if ($competitionValue === null && isset($keywordInfo['competition'])) {
+                    $competitionValue = (float) $keywordInfo['competition'];
                 }
 
-                $cpc = $item['cpc'] ?? null;
-                if ($cpc === null && isset($item['low_top_of_page_bid']) && isset($item['high_top_of_page_bid'])) {
+                $cpc = $keywordInfo['cpc'] ?? $item['cpc'] ?? null;
+                if ($cpc === null && isset($item['low_top_of_page_bid'], $item['high_top_of_page_bid'])) {
                     $cpc = ($item['low_top_of_page_bid'] + $item['high_top_of_page_bid']) / 2;
                 }
+
+                $mainIntent = $item['search_intent_info']['main_intent'] ?? null;
 
                 $results[] = new \App\DTOs\KeywordDataDTO(
                     keyword: $keywordValue,
                     source: 'dataforseo_labs_keyword_ideas',
-                    searchVolume: $item['search_volume'] ?? $item['monthly_searches'] ?? null,
+                    searchVolume: $searchVolume,
                     competition: $competitionValue,
                     cpc: $cpc !== null ? (float) $cpc : null,
+                    intentCategory: $mainIntent,
+                    semanticData: [
+                        'keyword_info' => $keywordInfo,
+                        'keyword_properties' => $item['keyword_properties'] ?? [],
+                        'search_intent_info' => $item['search_intent_info'] ?? [],
+                    ],
                 );
             }
 
