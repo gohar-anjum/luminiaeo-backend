@@ -1,15 +1,16 @@
 <?php
 
 return [
-    'default_queries' => (int) env('CITATION_DEFAULT_QUERIES', 5000),
-    'max_queries' => (int) env('CITATION_MAX_QUERIES_PER_TASK', 5000),
+    'default_queries' => (int) env('CITATION_DEFAULT_QUERIES', 10),
+    'max_queries' => (int) env('CITATION_MAX_QUERIES_PER_TASK', 10),
+    'faq_questions_max' => (int) env('CITATION_FAQ_QUESTIONS_MAX', 10),
     'chunk_size' => (int) env('CITATION_CHUNK_SIZE', 25),
     'chunk_delay_seconds' => (int) env('CITATION_CHUNK_DELAY', 0),
     'query_generation' => [
         'max_per_call' => (int) env('CITATION_QUERY_GENERATION_BATCH', 250),
     ],
     'validation' => [
-        'batch_size' => (int) env('CITATION_VALIDATION_BATCH', 25),
+        'batch_size' => (int) env('CITATION_VALIDATION_BATCH', 5),
     ],
     'openai' => [
         'model' => env('CITATION_OPENAI_MODEL', 'gpt-4o'),

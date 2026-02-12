@@ -394,7 +394,16 @@ class LLMClient
             ));
 
             $citationFound = (bool) ($entry['target_cited'] ?? $entry['citation_found'] ?? false);
-            
+            // Anti-hallucination: do not trust citation_found when no valid target URL was provided
+            if ($citationFound && count($refs) === 0) {
+                $citationFound = false;
+                Log::info('Citation batch: set citation_found to false (model claimed true but no valid target URLs)', [
+                    'provider' => $providerAlias,
+                    'query_index' => $index,
+                    'query' => $chunk[$index] ?? 'unknown',
+                ]);
+            }
+
             // Log each entry's URL information
             Log::info('Citation batch entry parsed', [
                 'provider' => $providerAlias,

@@ -85,7 +85,7 @@ class KeywordPlannerController extends Controller
             $result = $this->informationalKeywordService->getTopInformationalKeywords($keywords, [
                 'location_code' => $request->input('location_code', 2840),
                 'language_code' => $request->input('language_code', 'en'),
-                'limit' => $request->input('limit', 1000),
+                'limit' => $request->input('limit', 500),
                 'top_n' => $request->input('top_n', 100),
             ]);
 

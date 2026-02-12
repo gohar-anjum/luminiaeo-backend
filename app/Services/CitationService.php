@@ -8,6 +8,7 @@ use App\Jobs\CitationChunkJob;
 use App\Jobs\GenerateCitationQueriesJob;
 use App\Jobs\ProcessCitationTaskJob;
 use App\Models\CitationTask;
+use App\Services\FAQ\FaqGeneratorService;
 use App\Services\LLM\LLMClient;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -16,7 +17,8 @@ class CitationService
 {
     public function __construct(
         protected CitationRepositoryInterface $repository,
-        protected LLMClient $llmClient
+        protected LLMClient $llmClient,
+        protected FaqGeneratorService $faqGeneratorService
     ) {
     }
 
@@ -90,9 +92,31 @@ class CitationService
         return $normalized;
     }
 
+    /**
+     * Fetch queries from FAQ sources (SERP + AlsoAsked) for citation checking.
+     * Uses the same question pipeline as the FAQ generator; no LLM query generation.
+     */
+    public function fetchQueriesFromFaqSources(string $url, ?string $topic = null, int $maxQueries = 500): array
+    {
+        $options = [
+            'max_questions' => $maxQueries,
+        ];
+
+        $raw = $this->faqGeneratorService->fetchQuestionsForCitation($url, $topic, $options);
+
+        return collect($raw)
+            ->map(fn ($q) => $this->sanitizeQuery(is_string($q) ? $q : (string) ($q['question'] ?? $q['text'] ?? '')))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Generate queries via LLM (legacy; citation flow now uses fetchQueriesFromFaqSources).
+     */
     public function generateQueries(string $url, int $numQueries): array
     {
-        // Use LLM to generate queries
         $llmQueries = $this->llmClient->generateQueries($url, $numQueries);
         $queries = collect($llmQueries);
 

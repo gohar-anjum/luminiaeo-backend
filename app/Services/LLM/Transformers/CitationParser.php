@@ -25,28 +25,30 @@ class CitationParser
                         'explanation' => $decoded['explanation'] ?? '',
                     ];
                 } elseif (array_values($decoded) === $decoded && count($decoded) > 0) {
+                    // Bare array of strings: do not assume citation_found (may be unverified URLs)
                     $parsedResult = [
-                        'citation_found' => true,
-                        'confidence' => 0.8,
-                        'citation_references' => array_map('strval', $decoded),
-                        'explanation' => 'List of references returned',
+                        'citation_found' => false,
+                        'confidence' => 0.0,
+                        'citation_references' => [],
+                        'explanation' => 'List of URLs returned without citation_found; not treated as verified citations',
                     ];
                 }
             }
         }
 
-        // Fallback parsing if JSON parsing didn't work
+        // Fallback parsing if JSON parsing didn't work: do not treat prose URLs as citations (anti-hallucination)
         if ($parsedResult === null) {
             $lower = strtolower($text);
-            $found = (bool) (str_contains($lower, 'yes') || str_contains($lower, 'found') || str_contains($lower, 'cited') || str_contains($lower, 'references'));
-
-            preg_match_all('/https?:\/\/[^\s,;]+/i', $text, $m);
-            $refs = $m[0] ?? [];
+            $found = (bool) (str_contains($lower, '"citation_found": true') || str_contains($lower, '"citation_found":true'));
+            // Do not set citation_found from loose keywords or from URLs extracted from prose
+            if (!$found) {
+                $found = (bool) (preg_match('/\b(yes|true)\b.*(?:citation|cited|reference)/i', $text) || preg_match('/(?:citation|cited|reference).*(?:yes|true)\b/i', $text));
+            }
 
             $parsedResult = [
-                'citation_found' => $found || count($refs) > 0,
-                'confidence' => $found ? 0.6 : (count($refs) > 0 ? 0.7 : 0.0),
-                'citation_references' => array_values($refs),
+                'citation_found' => $found,
+                'confidence' => $found ? 0.5 : 0.0,
+                'citation_references' => [], // Never use regex-extracted URLs as citations in fallback
                 'explanation' => $found ? 'Detected citation language' : 'No structured citations found',
             ];
         }

@@ -793,6 +793,63 @@ class FaqGeneratorService
         return array_slice($uniqueQuestions, 0, 10);
     }
 
+    /**
+     * Combine SERP and AlsoAsked questions with deduplication, up to a configurable limit.
+     * Used by citation checker to get real user questions (no 10-question cap).
+     */
+    public function combineQuestionsWithLimit(array $serpQuestions, array $alsoAskedQuestions, int $maxCount = 10): array
+    {
+        $allQuestions = array_merge($serpQuestions, $alsoAskedQuestions);
+
+        $uniqueQuestions = [];
+        $seenQuestions = [];
+
+        foreach ($allQuestions as $question) {
+            $questionText = is_string($question) ? trim($question) : trim((string) ($question['question'] ?? $question['text'] ?? ''));
+            $questionLower = strtolower($questionText);
+
+            if (empty($questionLower)) {
+                continue;
+            }
+
+            if (isset($seenQuestions[$questionLower])) {
+                continue;
+            }
+
+            $isDuplicate = false;
+            foreach ($seenQuestions as $seenQuestion => $value) {
+                if ($this->calculateQuestionSimilarity($questionLower, $seenQuestion) > 0.8) {
+                    $isDuplicate = true;
+                    break;
+                }
+            }
+
+            if (!$isDuplicate) {
+                $uniqueQuestions[] = $questionText;
+                $seenQuestions[$questionLower] = true;
+            }
+        }
+
+        return array_slice($uniqueQuestions, 0, $maxCount);
+    }
+
+    /**
+     * Fetch questions from SERP and AlsoAsked for citation checking (no LLM generation).
+     * Returns combined, deduplicated list of question strings for use as citation queries.
+     */
+    public function fetchQuestionsForCitation(?string $url, ?string $topic = null, array $options = []): array
+    {
+        $languageCode = $options['language_code'] ?? config('services.faq.default_language', 'en');
+        $locationCode = (int) ($options['location_code'] ?? config('services.faq.default_location', 2840));
+        $region = $this->mapLocationCodeToRegion($locationCode);
+        $maxCount = (int) ($options['max_questions'] ?? config('citations.faq_questions_max', 500));
+
+        $serpQuestions = $this->fetchSerpQuestions($url, $topic, $languageCode, $locationCode);
+        $alsoAskedQuestions = $this->fetchAlsoAskedQuestions($url, $topic, $languageCode, $region);
+
+        return $this->combineQuestionsWithLimit($serpQuestions, $alsoAskedQuestions, $maxCount);
+    }
+
     protected function validateQuestionsUsage(array $faqs, array $sourceQuestions): void
     {
         $usedQuestions = 0;

@@ -27,7 +27,7 @@ Research Steps:
 4. Be honest about what you can verify vs. what you are inferring - when in doubt, return false.
 5. If you have any doubt whatsoever about a URL's existence, DO NOT include it.
 
-Reply with JSON:
+Reply with JSON only. Do not include URLs from your explanation or reasoning in citation_references; only include in citation_references URLs you are 200% certain exist.
 {
   "citation_found": boolean,
   "confidence": 0-100,
