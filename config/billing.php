@@ -35,4 +35,23 @@ return [
         'currency' => strtolower(env('BILLING_CURRENCY', env('CASHIER_CURRENCY', 'usd'))),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Billable routes (route name => feature key)
+    |--------------------------------------------------------------------------
+    | Used by credit.deduct middleware to reserve credits at request time.
+    | Refund (reverse) on failure; complete reservation on success.
+    */
+    'billable_routes' => [
+        'citations.analyze' => 'citation_feature',
+        'keyword-planner.ideas' => 'keyword_ideas',
+        'keyword-planner.informational-ideas' => 'keyword_ideas',
+        'keyword-planner.for-site' => 'keyword_ideas',
+        'keyword-planner.combined-clusters' => 'keyword_ideas',
+        'keyword-research.create' => 'keyword_ideas',
+        'seo.backlinks.submit' => 'backlink_feature',
+        'faq.generate' => 'faq_generator',
+        'faq.task.create' => 'faq_generator',
+    ],
+
 ];

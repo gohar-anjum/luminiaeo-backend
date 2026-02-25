@@ -22,14 +22,14 @@ class CitationService
     ) {
     }
 
-    public function createTask(CitationRequestDTO $dto): CitationTask
+    public function createTask(CitationRequestDTO $dto, ?int $creditReservationId = null): CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($dto->url);
         
         $lockKey = 'citation:lock:' . md5($normalizedUrl);
         $timeout = config('cache_locks.citations.timeout', 60);
         
-        return Cache::lock($lockKey, $timeout)->get(function () use ($normalizedUrl, $dto) {
+        return Cache::lock($lockKey, $timeout)->get(function () use ($normalizedUrl, $dto, $creditReservationId) {
             $cacheDays = config('citations.cache_days', 30);
             $existingTask = $this->repository->findCompletedByUrl($normalizedUrl, $cacheDays);
 
@@ -45,7 +45,7 @@ class CitationService
             $max = config('citations.max_queries');
             $numQueries = min(max($dto->numQueries, 1), $max);
 
-            $task = $this->repository->create([
+            $attributes = [
                 'user_id' => \Illuminate\Support\Facades\Auth::id(),
                 'url' => $normalizedUrl,
                 'status' => CitationTask::STATUS_GENERATING,
@@ -53,7 +53,12 @@ class CitationService
                     'requested_queries' => $dto->numQueries,
                     'num_queries' => $numQueries,
                 ],
-            ]);
+            ];
+            if ($creditReservationId !== null) {
+                $attributes['credit_reservation_id'] = $creditReservationId;
+            }
+
+            $task = $this->repository->create($attributes);
 
             GenerateCitationQueriesJob::dispatch($task->id, $normalizedUrl, $numQueries);
 

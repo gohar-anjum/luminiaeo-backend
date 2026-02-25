@@ -28,6 +28,7 @@ class FaqTask extends Model
         'error_message',
         'faq_id',
         'completed_at',
+        'credit_reservation_id',
     ];
 
     protected $casts = [

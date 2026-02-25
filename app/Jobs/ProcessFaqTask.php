@@ -372,6 +372,11 @@ class ProcessFaqTask implements ShouldQueue
 
     protected function recordFaqUsage(FaqTask $task): void
     {
+        if ($task->credit_reservation_id) {
+            app(\App\Domain\Billing\Contracts\WalletServiceInterface::class)
+                ->completeReservation($task->credit_reservation_id);
+            return;
+        }
         $user = $task->user;
         if ($user) {
             app(\App\Domain\Billing\Services\CreditConsumptionService::class)

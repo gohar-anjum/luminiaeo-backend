@@ -11,6 +11,7 @@ use App\Services\Keyword\CombinedKeywordService;
 use App\Services\Keyword\InformationalKeywordService;
 use App\Services\Keyword\SemanticClusteringService;
 use App\Services\ApiResponseModifier;
+use App\Support\ReservationCompletion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -42,14 +43,28 @@ class KeywordPlannerController extends Controller
 
     public function getKeywordIdeas(Request $request)
     {
-        $request->validate(['keyword' => 'required|string']);
-        $ideas = $this->keywordPlannerService->getKeywordIdeas($request->keyword);
-
-        return response()->json([
-            'status' => 'success',
-            'count' => count($ideas),
-            'data' => $ideas,
-        ]);
+        try {
+            return ReservationCompletion::run($request, function () use ($request) {
+                $request->validate(['keyword' => 'required|string']);
+                $ideas = $this->keywordPlannerService->getKeywordIdeas($request->keyword);
+                return response()->json([
+                    'status' => 'success',
+                    'count' => count($ideas),
+                    'data' => $ideas,
+                ]);
+            });
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->responseModifier
+                ->setMessage($e->getMessage())
+                ->setResponseCode(422)
+                ->response();
+        } catch (\Exception $e) {
+            Log::error('Keyword ideas error', ['error' => $e->getMessage()]);
+            return $this->responseModifier
+                ->setMessage($e->getMessage())
+                ->setResponseCode(500)
+                ->response();
+        }
     }
 
     /**
@@ -58,52 +73,54 @@ class KeywordPlannerController extends Controller
      */
     public function getInformationalKeywordIdeas(Request $request)
     {
-        $request->validate([
-            'keywords' => 'required_without:keyword|array',
-            'keywords.*' => 'string|max:255',
-            'keyword' => 'required_without:keywords|string|max:255',
-            'location_code' => 'sometimes|integer|min:1',
-            'language_code' => 'sometimes|string|size:2',
-            'limit' => 'sometimes|integer|min:1|max:1000',
-            'top_n' => 'sometimes|integer|min:1|max:100',
-        ]);
-
         $keywords = $request->filled('keywords')
             ? $request->input('keywords')
             : [$request->input('keyword')];
-
-        $keywords = array_values(array_filter(array_map('trim', $keywords), fn ($s) => $s !== ''));
-
-        if (empty($keywords)) {
-            return $this->responseModifier
-                ->setMessage('At least one keyword is required.')
-                ->setResponseCode(422)
-                ->response();
-        }
+        $keywords = is_array($keywords) ? array_values(array_filter(array_map('trim', $keywords), fn ($s) => $s !== '')) : [];
 
         try {
-            $result = $this->informationalKeywordService->getTopInformationalKeywords($keywords, [
-                'location_code' => $request->input('location_code', 2840),
-                'language_code' => $request->input('language_code', 'en'),
-                'limit' => $request->input('limit', 500),
-                'top_n' => $request->input('top_n', 100),
-            ]);
+            return ReservationCompletion::run($request, function () use ($request, $keywords) {
+                $request->validate([
+                    'keywords' => 'required_without:keyword|array',
+                    'keywords.*' => 'string|max:255',
+                    'keyword' => 'required_without:keywords|string|max:255',
+                    'location_code' => 'sometimes|integer|min:1',
+                    'language_code' => 'sometimes|string|size:2',
+                    'limit' => 'sometimes|integer|min:1|max:1000',
+                    'top_n' => 'sometimes|integer|min:1|max:100',
+                ]);
 
-            $data = array_map(fn ($dto) => $dto->toArray(), $result);
+                if (empty($keywords)) {
+                    throw new \InvalidArgumentException('At least one keyword is required.');
+                }
 
+                $result = $this->informationalKeywordService->getTopInformationalKeywords($keywords, [
+                    'location_code' => $request->input('location_code', 2840),
+                    'language_code' => $request->input('language_code', 'en'),
+                    'limit' => $request->input('limit', 500),
+                    'top_n' => $request->input('top_n', 100),
+                ]);
+
+                $data = array_map(fn ($dto) => $dto->toArray(), $result);
+
+                return $this->responseModifier
+                    ->setData([
+                        'keywords' => $data,
+                        'total_count' => count($data),
+                    ])
+                    ->setMessage('Top informational keyword ideas retrieved successfully.')
+                    ->response();
+            });
+        } catch (\InvalidArgumentException $e) {
             return $this->responseModifier
-                ->setData([
-                    'keywords' => $data,
-                    'total_count' => count($data),
-                ])
-                ->setMessage('Top informational keyword ideas retrieved successfully.')
+                ->setMessage($e->getMessage())
+                ->setResponseCode(422)
                 ->response();
         } catch (DataForSEOException $e) {
             Log::error('DataForSEO error in informational keyword ideas', [
                 'error' => $e->getMessage(),
                 'keywords' => $keywords,
             ]);
-
             return $this->responseModifier
                 ->setMessage('DataForSEO API error: ' . $e->getMessage())
                 ->setResponseCode($e->getStatusCode() ?? 500)
@@ -114,7 +131,6 @@ class KeywordPlannerController extends Controller
                 'keywords' => $keywords,
                 'trace' => $e->getTraceAsString(),
             ]);
-
             return $this->responseModifier
                 ->setMessage('An unexpected error occurred. Please try again.')
                 ->setResponseCode(500)
@@ -124,31 +140,31 @@ class KeywordPlannerController extends Controller
 
     public function getKeywordsForSite(KeywordsForSitePlannerRequest $request)
     {
-        $validated = $request->validated();
-
         try {
-            $keywords = $this->dataForSEOService->getKeywordsForSite(
-                $validated['target'],
-                $validated['location_code'],
-                $validated['language_code'],
-                $validated['search_partners'],
-                $validated['date_from'],
-                $validated['date_to'],
-                $validated['include_serp_info'],
-                $validated['tag'],
-                $validated['limit'] ?? null
-            );
+            return ReservationCompletion::run($request, function () use ($request) {
+                $validated = $request->validated();
+                $keywords = $this->dataForSEOService->getKeywordsForSite(
+                    $validated['target'],
+                    $validated['location_code'],
+                    $validated['language_code'],
+                    $validated['search_partners'],
+                    $validated['date_from'],
+                    $validated['date_to'],
+                    $validated['include_serp_info'],
+                    $validated['tag'],
+                    $validated['limit'] ?? null
+                );
 
-            $data = array_map(function ($dto) {
-                return $dto->toArray();
-            }, $keywords);
+                $data = array_map(function ($dto) {
+                    return $dto->toArray();
+                }, $keywords);
 
-            return $this->responseModifier
-                ->setData($data)
-                ->setMessage('Keywords for site retrieved successfully')
-                ->response();
+                return $this->responseModifier
+                    ->setData($data)
+                    ->setMessage('Keywords for site retrieved successfully')
+                    ->response();
+            });
         } catch (InvalidArgumentException $e) {
-
             return $this->responseModifier
                 ->setMessage('Invalid request: ' . $e->getMessage())
                 ->setResponseCode(422)
@@ -157,20 +173,13 @@ class KeywordPlannerController extends Controller
             Log::error('DataForSEO error getting keywords for site', [
                 'error' => $e->getMessage(),
                 'error_code' => $e->getCode(),
-                'target' => $validated['target'] ?? null,
             ]);
-
             return $this->responseModifier
                 ->setMessage('DataForSEO API error: ' . $e->getMessage())
                 ->setResponseCode($e->getStatusCode() ?? 500)
                 ->response();
         } catch (\Exception $e) {
-            Log::error('Unexpected error getting keywords for site', [
-                'error' => $e->getMessage(),
-                'target' => $validated['target'] ?? null,
-                'trace' => $e->getTraceAsString(),
-            ]);
-
+            Log::error('Unexpected error getting keywords for site', ['error' => $e->getMessage()]);
             return $this->responseModifier
                 ->setMessage('An unexpected error occurred. Please try again.')
                 ->setResponseCode(500)
@@ -180,62 +189,67 @@ class KeywordPlannerController extends Controller
 
     public function getCombinedKeywordsWithClusters(Request $request)
     {
-        $request->validate([
-            'target' => 'required|string|max:255',
-            'location_code' => 'sometimes|integer|min:1',
-            'language_code' => 'sometimes|string|size:2',
-            'limit' => 'sometimes|integer|min:1|max:1000',
-            'num_clusters' => 'sometimes|integer|min:2|max:50',
-            'enable_clustering' => 'sometimes|boolean',
-        ]);
-
         try {
-            $keywords = $this->combinedKeywordService->getCombinedKeywords(
-                $request->input('target'),
-                $request->input('location_code', 2840),
-                $request->input('language_code', 'en'),
-                $request->input('limit')
-            );
+            return ReservationCompletion::run($request, function () use ($request) {
+                $request->validate([
+                    'target' => 'required|string|max:255',
+                    'location_code' => 'sometimes|integer|min:1',
+                    'language_code' => 'sometimes|string|size:2',
+                    'limit' => 'sometimes|integer|min:1|max:1000',
+                    'num_clusters' => 'sometimes|integer|min:2|max:50',
+                    'enable_clustering' => 'sometimes|boolean',
+                ]);
 
-            $data = [
-                'keywords' => array_map(function ($dto) {
-                    return $dto->toArray();
-                }, $keywords),
-                'total_count' => count($keywords),
-            ];
+                $keywords = $this->combinedKeywordService->getCombinedKeywords(
+                    $request->input('target'),
+                    $request->input('location_code', 2840),
+                    $request->input('language_code', 'en'),
+                    $request->input('limit')
+                );
 
-            if ($request->input('enable_clustering', true)) {
-                $numClusters = $request->input('num_clusters');
-                if ($numClusters === null) {
-                    $numClusters = min(10, max(3, (int) (count($keywords) / 20)));
+                $data = [
+                    'keywords' => array_map(function ($dto) {
+                        return $dto->toArray();
+                    }, $keywords),
+                    'total_count' => count($keywords),
+                ];
+
+                if ($request->input('enable_clustering', true)) {
+                    $numClusters = $request->input('num_clusters');
+                    if ($numClusters === null) {
+                        $numClusters = min(10, max(3, (int) (count($keywords) / 20)));
+                    }
+
+                    $clusteringResult = $this->clusteringService->clusterKeywords($keywords, $numClusters, true);
+
+                    $data['clusters'] = array_map(function ($cluster) {
+                        return [
+                            'topic_name' => $cluster->topicName,
+                            'keyword_count' => $cluster->keywordCount,
+                            'suggested_article_titles' => $cluster->suggestedArticleTitles,
+                            'recommended_faq_questions' => $cluster->recommendedFaqQuestions,
+                        ];
+                    }, $clusteringResult['clusters']);
+
+                    $data['keyword_cluster_map'] = $clusteringResult['keyword_cluster_map'];
+                    $data['clusters_count'] = count($clusteringResult['clusters']);
                 }
 
-                $clusteringResult = $this->clusteringService->clusterKeywords($keywords, $numClusters, true);
-
-                $data['clusters'] = array_map(function ($cluster) {
-                    return [
-                        'topic_name' => $cluster->topicName,
-                        'keyword_count' => $cluster->keywordCount,
-                        'suggested_article_titles' => $cluster->suggestedArticleTitles,
-                        'recommended_faq_questions' => $cluster->recommendedFaqQuestions,
-                    ];
-                }, $clusteringResult['clusters']);
-
-                $data['keyword_cluster_map'] = $clusteringResult['keyword_cluster_map'];
-                $data['clusters_count'] = count($clusteringResult['clusters']);
-            }
-
+                return $this->responseModifier
+                    ->setData($data)
+                    ->setMessage('Combined keywords with clusters retrieved successfully')
+                    ->response();
+            });
+        } catch (\Illuminate\Validation\ValidationException $e) {
             return $this->responseModifier
-                ->setData($data)
-                ->setMessage('Combined keywords with clusters retrieved successfully')
+                ->setMessage($e->getMessage())
+                ->setResponseCode(422)
                 ->response();
         } catch (\Exception $e) {
             Log::error('Error getting combined keywords with clusters', [
                 'error' => $e->getMessage(),
                 'target' => $request->input('target'),
-                'trace' => $e->getTraceAsString(),
             ]);
-
             return $this->responseModifier
                 ->setMessage('Failed to retrieve combined keywords: ' . $e->getMessage())
                 ->setResponseCode(500)

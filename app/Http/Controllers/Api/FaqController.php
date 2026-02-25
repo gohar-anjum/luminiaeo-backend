@@ -2,11 +2,11 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Domain\Billing\Services\CreditConsumptionService;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\FaqGenerationRequest;
 use App\Services\ApiResponseModifier;
 use App\Services\FAQ\FaqGeneratorService;
+use App\Support\ReservationCompletion;
 use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\JsonResponse;
 
@@ -17,23 +17,19 @@ class FaqController extends Controller
     public function __construct(
         protected FaqGeneratorService $faqService,
         protected ApiResponseModifier $responseModifier,
-        protected CreditConsumptionService $creditConsumption
     ) {}
 
     public function generate(FaqGenerationRequest $request): JsonResponse
     {
         try {
-            $user = $request->user();
-            $cost = $this->creditConsumption->assertCanConsume($user, 'faq_generator');
-
             $validated = $request->validated();
 
-            $responseDTO = $this->faqService->generateFaqs(
-                $validated['input'],
-                $validated['options'] ?? []
-            );
-
-            $this->creditConsumption->recordUsage($user, 'faq_generator', $cost);
+            $responseDTO = ReservationCompletion::run($request, function () use ($validated) {
+                return $this->faqService->generateFaqs(
+                    $validated['input'],
+                    $validated['options'] ?? []
+                );
+            });
 
             return $this->responseModifier
                 ->setData($responseDTO->toArray())
@@ -63,13 +59,14 @@ class FaqController extends Controller
     public function createTask(FaqGenerationRequest $request): JsonResponse
     {
         try {
-            $this->creditConsumption->assertCanConsume($request->user(), 'faq_generator');
-
             $validated = $request->validated();
+            $reservation = $request->attributes->get('credit_reservation');
+            $creditReservationId = $reservation['transaction_id'] ?? null;
 
             $task = $this->faqService->createFaqTask(
                 $validated['input'],
-                $validated['options'] ?? []
+                $validated['options'] ?? [],
+                $creditReservationId
             );
 
             return $this->responseModifier

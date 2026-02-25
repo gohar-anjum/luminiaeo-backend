@@ -38,6 +38,60 @@ class BillingController extends Controller
     }
 
     /**
+     * Get current user's credit activity (transaction history).
+     * Query params: per_page (default 20), page, type (purchase|usage|refund|bonus|adjustment).
+     */
+    public function transactions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $perPage = min((int) $request->input('per_page', 20), 100);
+        $type = $request->input('type');
+
+        $query = CreditTransaction::where('user_id', $user->id)
+            ->orderByDesc('created_at');
+
+        if ($type && in_array($type, [
+            CreditTransaction::TYPE_PURCHASE,
+            CreditTransaction::TYPE_USAGE,
+            CreditTransaction::TYPE_REFUND,
+            CreditTransaction::TYPE_BONUS,
+            CreditTransaction::TYPE_ADJUSTMENT,
+        ], true)) {
+            $query->where('type', $type);
+        }
+
+        $paginator = $query->paginate($perPage);
+
+        $items = $paginator->through(function (CreditTransaction $tx) {
+            return [
+                'id' => $tx->id,
+                'type' => $tx->type,
+                'amount' => $tx->amount,
+                'balance_after' => $tx->balance_after,
+                'feature_key' => $tx->feature_key,
+                'status' => $tx->status ?? 'completed',
+                'reference_type' => $tx->reference_type,
+                'reference_id' => $tx->reference_id,
+                'created_at' => $tx->created_at?->toIso8601String(),
+                'metadata' => $tx->metadata,
+            ];
+        });
+
+        return $this->responseModifier
+            ->setData([
+                'transactions' => $items->items(),
+                'pagination' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                ],
+            ])
+            ->setMessage('Credit activity retrieved successfully')
+            ->response();
+    }
+
+    /**
      * List billable features with credit costs (for frontend).
      */
     public function features(): JsonResponse

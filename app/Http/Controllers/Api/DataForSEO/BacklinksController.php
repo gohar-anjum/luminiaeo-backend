@@ -10,6 +10,7 @@ use App\Http\Requests\BacklinksResultsRequest;
 use App\Http\Requests\BacklinksSubmitRequest;
 use App\Interfaces\DataForSEO\BacklinksRepositoryInterface;
 use App\Services\ApiResponseModifier;
+use App\Support\ReservationCompletion;
 use App\Traits\ValidatesResourceOwnership;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
@@ -29,38 +30,39 @@ class BacklinksController extends Controller
     public function submit(BacklinksSubmitRequest $request): JsonResponse
     {
         try {
-            $validated = $request->validated();
+            return ReservationCompletion::run($request, function () use ($request) {
+                $validated = $request->validated();
+                $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
+                $seoTask = $this->repository->createTask(
+                    $validated['domain'],
+                    $validated['limit'] ?? $defaultLimit
+                );
 
-            $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
-            $seoTask = $this->repository->createTask(
-                $validated['domain'],
-                $validated['limit'] ?? $defaultLimit
-            );
+                $payload = $seoTask->result ?? [];
+                $summary = $payload['summary'] ?? [];
+                $pbnDetection = $payload['pbn_detection'] ?? [];
 
-            $payload = $seoTask->result ?? [];
-            $summary = $payload['summary'] ?? [];
-            $pbnDetection = $payload['pbn_detection'] ?? [];
+                $backlinks = [];
+                if (isset($payload['backlinks']['items']) && is_array($payload['backlinks']['items'])) {
+                    $backlinks = $payload['backlinks']['items'];
+                } elseif (isset($payload['backlinks']) && is_array($payload['backlinks'])) {
+                    $backlinks = $payload['backlinks'];
+                }
 
-            $backlinks = [];
-            if (isset($payload['backlinks']['items']) && is_array($payload['backlinks']['items'])) {
-                $backlinks = $payload['backlinks']['items'];
-            } elseif (isset($payload['backlinks']) && is_array($payload['backlinks'])) {
-                $backlinks = $payload['backlinks'];
-            }
-
-            return $this->responseModifier
-                ->setData([
-                    'task_id' => $seoTask->task_id,
-                    'domain' => $seoTask->domain,
-                    'status' => $seoTask->status,
-                    'submitted_at' => $seoTask->submitted_at,
-                    'completed_at' => $seoTask->completed_at,
-                    'backlinks' => $backlinks,
-                    'summary' => $summary,
-                    'pbn_detection' => $pbnDetection,
-                ])
-                ->setMessage('Backlinks retrieved successfully')
-                ->response();
+                return $this->responseModifier
+                    ->setData([
+                        'task_id' => $seoTask->task_id,
+                        'domain' => $seoTask->domain,
+                        'status' => $seoTask->status,
+                        'submitted_at' => $seoTask->submitted_at,
+                        'completed_at' => $seoTask->completed_at,
+                        'backlinks' => $backlinks,
+                        'summary' => $summary,
+                        'pbn_detection' => $pbnDetection,
+                    ])
+                    ->setMessage('Backlinks retrieved successfully')
+                    ->response();
+            });
         } catch (PbnDetectorException $e) {
             Log::error('PBN detector error', ['error' => $e->getMessage()]);
             return $this->responseModifier->setMessage($e->getMessage())->setResponseCode(502)->response();

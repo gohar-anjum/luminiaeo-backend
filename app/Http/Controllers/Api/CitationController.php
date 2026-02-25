@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Domain\Billing\Services\CreditConsumptionService;
 use App\DTOs\CitationRequestDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CitationAnalyzeRequest;
@@ -22,20 +21,18 @@ class CitationController extends Controller
         protected CitationService $citationService,
         protected CitationRepositoryInterface $citationRepository,
         protected ApiResponseModifier $responseModifier,
-        protected CreditConsumptionService $creditConsumption,
     ) {
     }
 
     public function analyze(CitationAnalyzeRequest $request)
     {
-        $this->creditConsumption->assertCanConsume($request->user(), 'citation_feature');
-
         $validated = $request->validated();
-
         $dto = CitationRequestDTO::fromArray($validated, config('citations.default_queries', 1000));
 
-        // Use the standard citation flow
-        $task = $this->citationService->createTask($dto);
+        $reservation = $request->attributes->get('credit_reservation');
+        $creditReservationId = $reservation['transaction_id'] ?? null;
+
+        $task = $this->citationService->createTask($dto, $creditReservationId);
 
         return $this->responseModifier
             ->setData([

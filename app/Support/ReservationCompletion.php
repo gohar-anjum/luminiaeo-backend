@@ -1,0 +1,31 @@
+<?php
+
+namespace App\Support;
+
+use App\Domain\Billing\Contracts\WalletServiceInterface;
+use Illuminate\Http\Request;
+
+/**
+ * Helper for sync billable endpoints: complete reservation on success, reverse on exception.
+ */
+final class ReservationCompletion
+{
+    public static function run(Request $request, callable $action): mixed
+    {
+        $reservation = $request->attributes->get('credit_reservation');
+        $reservationId = $reservation['transaction_id'] ?? null;
+
+        try {
+            $result = $action();
+            if ($reservationId) {
+                app(WalletServiceInterface::class)->completeReservation($reservationId);
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            if ($reservationId) {
+                app(WalletServiceInterface::class)->reverseReservation($reservationId);
+            }
+            throw $e;
+        }
+    }
+}

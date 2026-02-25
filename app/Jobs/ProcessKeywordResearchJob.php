@@ -54,6 +54,11 @@ class ProcessKeywordResearchJob implements ShouldQueue
                 'completed_at' => now(),
             ]);
 
+            if ($job->credit_reservation_id) {
+                app(\App\Domain\Billing\Contracts\WalletServiceInterface::class)
+                    ->completeReservation($job->credit_reservation_id);
+            }
+
             Log::info('Keyword research job completed', ['job_id' => $job->id]);
         } catch (\Throwable $e) {
             // Only update status if not already set to failed (to avoid overwriting more specific error messages)

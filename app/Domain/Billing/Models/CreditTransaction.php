@@ -18,6 +18,10 @@ class CreditTransaction extends Model
 
     public const TYPE_ADJUSTMENT = 'adjustment';
 
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_COMPLETED = 'completed';
+    public const STATUS_REVERSED = 'reversed';
+
     protected $table = 'credit_transactions';
 
     protected $fillable = [
@@ -29,6 +33,8 @@ class CreditTransaction extends Model
         'reference_type',
         'reference_id',
         'metadata',
+        'status',
+        'idempotency_key',
     ];
 
     protected function casts(): array

@@ -15,6 +15,7 @@ class KeywordResearchJob extends Model
         'query',
         'status',
         'result',
+        'credit_reservation_id',
     ];
 
     // Note: project_id, language_code, geoTargetId, settings, progress, error_message,

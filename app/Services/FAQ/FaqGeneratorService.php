@@ -1365,7 +1365,7 @@ class FaqGeneratorService
         $this->faqRepository->incrementApiCallsSaved($faqId);
     }
 
-    public function createFaqTask(string $input, array $options = []): \App\Models\FaqTask
+    public function createFaqTask(string $input, array $options = [], ?int $creditReservationId = null): \App\Models\FaqTask
     {
         if (empty($input)) {
             throw new \InvalidArgumentException('Input field is required (URL or topic)');
@@ -1378,7 +1378,7 @@ class FaqGeneratorService
         $lockKey = 'faq:task:lock:' . md5(serialize([$url, $topic, $options]));
         $timeout = config('cache_locks.faq.timeout', 120);
         
-        return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options) {
+        return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options, $creditReservationId) {
             $normalizedTopic = $topic ? strtolower(trim($topic)) : null;
             $normalizedUrl = $url ? $this->normalizeUrl($url) : null;
 
@@ -1483,7 +1483,7 @@ class FaqGeneratorService
                 $searchKeyword = str_replace('www.', '', $searchKeyword);
             }
 
-            $task = \App\Models\FaqTask::create([
+            $attributes = [
                 'user_id' => Auth::id(),
                 'url' => $url,
                 'topic' => $topic,
@@ -1492,7 +1492,11 @@ class FaqGeneratorService
                 'alsoasked_search_id' => $alsoAskedSearchId,
                 'options' => $options,
                 'status' => $alsoAskedSearchId ? 'pending' : 'processing',
-            ]);
+            ];
+            if ($creditReservationId !== null) {
+                $attributes['credit_reservation_id'] = $creditReservationId;
+            }
+            $task = \App\Models\FaqTask::create($attributes);
 
             \App\Jobs\ProcessFaqTask::dispatch($task->id);
 

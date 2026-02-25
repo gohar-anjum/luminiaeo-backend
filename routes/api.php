@@ -40,14 +40,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/profile', [UserController::class, 'updateProfile'])->name('user.profile.update');
 
     Route::prefix('citations')->middleware('throttle:20,1')->group(function () {
-        Route::post('/analyze', [CitationController::class, 'analyze'])->name('citations.analyze');
+        Route::post('/analyze', [CitationController::class, 'analyze'])->middleware('credit.deduct')->name('citations.analyze');
         Route::get('/status/{taskId}', [CitationController::class, 'status'])->name('citations.status');
         Route::get('/results/{taskId}', [CitationController::class, 'results'])->name('citations.results');
         Route::post('/retry/{taskId}', [CitationController::class, 'retry'])->name('citations.retry');
     });
 
     Route::prefix('keyword-research')->middleware('throttle:10,1')->group(function () {
-        Route::post('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'create'])->name('keyword-research.create');
+        Route::post('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'create'])->middleware('credit.deduct')->name('keyword-research.create');
         Route::get('/', [\App\Http\Controllers\Api\KeywordResearchController::class, 'index'])->name('keyword-research.index');
         Route::get('/{id}/status', [\App\Http\Controllers\Api\KeywordResearchController::class, 'status'])->name('keyword-research.status');
         Route::get('/{id}/results', [\App\Http\Controllers\Api\KeywordResearchController::class, 'results'])->name('keyword-research.results');
@@ -56,15 +56,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('keyword-planner')->middleware('throttle:20,1')->group(function () {
 
         Route::get('/ideas', [KeywordPlannerController::class, 'getKeywordIdeas'])
+            ->middleware('credit.deduct')
             ->name('keyword-planner.ideas');
 
         Route::post('/informational-ideas', [KeywordPlannerController::class, 'getInformationalKeywordIdeas'])
+            ->middleware('credit.deduct')
             ->name('keyword-planner.informational-ideas');
 
         Route::post('/for-site', [KeywordPlannerController::class, 'getKeywordsForSite'])
+            ->middleware('credit.deduct')
             ->name('keyword-planner.for-site');
 
         Route::post('/combined-with-clusters', [KeywordPlannerController::class, 'getCombinedKeywordsWithClusters'])
+            ->middleware('credit.deduct')
             ->name('keyword-planner.combined-clusters');
     });
 
@@ -78,6 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::prefix('backlinks')->group(function () {
             Route::post('/submit', [BacklinksController::class, 'submit'])
+                ->middleware('credit.deduct')
                 ->name('seo.backlinks.submit');
             Route::post('/results', [BacklinksController::class, 'results'])
                 ->name('seo.backlinks.results');
@@ -97,8 +102,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::prefix('faq')->middleware('throttle:30,1')->group(function () {
         Route::post('/generate', [\App\Http\Controllers\Api\FaqController::class, 'generate'])
+            ->middleware('credit.deduct')
             ->name('faq.generate');
         Route::post('/task', [\App\Http\Controllers\Api\FaqController::class, 'createTask'])
+            ->middleware('credit.deduct')
             ->name('faq.task.create');
         Route::get('/task/{taskId}', [\App\Http\Controllers\Api\FaqController::class, 'getTaskStatus'])
             ->name('faq.task.status');
@@ -107,6 +114,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Billing (credits, checkout, features)
     Route::prefix('billing')->group(function () {
         Route::get('/balance', [\App\Http\Controllers\Api\BillingController::class, 'balance'])->name('billing.balance');
+        Route::get('/transactions', [\App\Http\Controllers\Api\BillingController::class, 'transactions'])->name('billing.transactions');
         Route::get('/features', [\App\Http\Controllers\Api\BillingController::class, 'features'])->name('billing.features');
         Route::get('/purchase-rules', [\App\Http\Controllers\Api\BillingController::class, 'purchaseRules'])->name('billing.purchase-rules');
         Route::post('/checkout', [\App\Http\Controllers\Api\BillingController::class, 'createCheckout'])->name('billing.checkout');

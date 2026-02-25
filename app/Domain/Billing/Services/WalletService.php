@@ -88,4 +88,85 @@ class WalletService implements WalletServiceInterface
             );
         }
     }
+
+    public function reserveCredits(User $user, string $featureKey, int $amount, array $context = []): CreditTransaction
+    {
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Amount must be positive for reservation.');
+        }
+
+        return DB::transaction(function () use ($user, $featureKey, $amount, $context) {
+            $user = User::where('id', $user->id)->lockForUpdate()->firstOrFail();
+            $this->assertSufficientCredits($user, $amount);
+
+            $deduction = -$amount;
+            $newBalance = $user->credits_balance + $deduction;
+
+            $tx = CreditTransaction::create([
+                'user_id' => $user->id,
+                'type' => CreditTransaction::TYPE_USAGE,
+                'amount' => $deduction,
+                'balance_after' => $newBalance,
+                'feature_key' => $featureKey,
+                'reference_type' => $context['reference_type'] ?? null,
+                'reference_id' => $context['reference_id'] ?? null,
+                'metadata' => $context['metadata'] ?? null,
+                'status' => CreditTransaction::STATUS_PENDING,
+                'idempotency_key' => $context['idempotency_key'] ?? null,
+            ]);
+
+            $user->update(['credits_balance' => $newBalance]);
+
+            return $tx;
+        });
+    }
+
+    public function completeReservation(int $creditTransactionId): void
+    {
+        DB::transaction(function () use ($creditTransactionId) {
+            $tx = CreditTransaction::where('id', $creditTransactionId)
+                ->where('status', CreditTransaction::STATUS_PENDING)
+                ->lockForUpdate()
+                ->first();
+
+            if ($tx) {
+                $tx->update(['status' => CreditTransaction::STATUS_COMPLETED]);
+            }
+        });
+    }
+
+    public function reverseReservation(int $creditTransactionId): void
+    {
+        DB::transaction(function () use ($creditTransactionId) {
+            $tx = CreditTransaction::where('id', $creditTransactionId)
+                ->where('status', CreditTransaction::STATUS_PENDING)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $tx) {
+                return;
+            }
+
+            $user = User::where('id', $tx->user_id)->lockForUpdate()->firstOrFail();
+            $refundAmount = (int) abs($tx->amount);
+            $newBalance = $user->credits_balance + $refundAmount;
+
+            $tx->update(['status' => CreditTransaction::STATUS_REVERSED]);
+
+            CreditTransaction::create([
+                'user_id' => $user->id,
+                'type' => CreditTransaction::TYPE_REFUND,
+                'amount' => $refundAmount,
+                'balance_after' => $newBalance,
+                'feature_key' => $tx->feature_key,
+                'reference_type' => 'reversal_of',
+                'reference_id' => (string) $tx->id,
+                'metadata' => array_merge($tx->metadata ?? [], ['original_transaction_id' => $tx->id]),
+                'status' => CreditTransaction::STATUS_COMPLETED,
+                'idempotency_key' => null,
+            ]);
+
+            $user->update(['credits_balance' => $newBalance]);
+        });
+    }
 }

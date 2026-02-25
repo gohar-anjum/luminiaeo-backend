@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Billing\Contracts\WalletServiceInterface;
 use App\DTOs\KeywordResearchRequestDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\KeywordResearchRequest;
@@ -28,7 +29,15 @@ class KeywordResearchController extends Controller
     {
         $validated = $request->validated();
         $dto = KeywordResearchRequestDTO::fromArray($validated);
-        $job = $this->keywordService->createKeywordResearch($dto);
+        $reservation = $request->attributes->get('credit_reservation');
+        $creditReservationId = $reservation['transaction_id'] ?? null;
+
+        $job = $this->keywordService->createKeywordResearch($dto, $creditReservationId);
+
+        // If duplicate was returned (job not just created), reverse reservation so user isn't charged
+        if ($creditReservationId && ! $job->wasRecentlyCreated) {
+            app(WalletServiceInterface::class)->reverseReservation($creditReservationId);
+        }
 
         return $this->responseModifier
             ->setData([

@@ -31,7 +31,7 @@ class KeywordService
         $this->jobRepository = $jobRepository;
     }
 
-    public function createKeywordResearch(KeywordResearchRequestDTO $dto): KeywordResearchJobModel
+    public function createKeywordResearch(KeywordResearchRequestDTO $dto, ?int $creditReservationId = null): KeywordResearchJobModel
     {
         $userId = Auth::id();
         
@@ -39,7 +39,7 @@ class KeywordService
         $lockKey = 'keyword_research:lock:' . md5($userId . ':' . $dto->query);
         $timeout = config('cache_locks.keyword_research.timeout', 10);
         
-        return Cache::lock($lockKey, $timeout)->get(function () use ($userId, $dto) {
+        return Cache::lock($lockKey, $timeout)->get(function () use ($userId, $dto, $creditReservationId) {
             // Check again after acquiring lock
             $duplicate = $this->jobRepository->findRecentDuplicate($userId, $dto->query, 5);
             if ($duplicate) {
@@ -61,6 +61,7 @@ class KeywordService
                 'project_id' => $dto->projectId,
                 'language_code' => $dto->languageCode,
                 'geoTargetId' => $dto->geoTargetId,
+                'credit_reservation_id' => $creditReservationId,
                 'settings' => [
                     'max_keywords' => $dto->maxKeywords,
                     'enable_google_planner' => $dto->enableGooglePlanner,

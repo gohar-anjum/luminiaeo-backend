@@ -30,6 +30,7 @@ class CitationTask extends Model
         'results',
         'competitors',
         'meta',
+        'credit_reservation_id',
     ];
 
     protected $casts = [

@@ -2,6 +2,12 @@
 
 namespace App\Providers;
 
+use App\Models\CitationTask;
+use App\Models\FaqTask;
+use App\Models\KeywordResearchJob;
+use App\Observers\CitationTaskObserver;
+use App\Observers\FaqTaskObserver;
+use App\Observers\KeywordResearchJobObserver;
 use App\Services\CacheService;
 use Illuminate\Support\ServiceProvider;
 
@@ -17,6 +23,8 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-
+        CitationTask::observe(CitationTaskObserver::class);
+        FaqTask::observe(FaqTaskObserver::class);
+        KeywordResearchJob::observe(KeywordResearchJobObserver::class);
     }
 }
