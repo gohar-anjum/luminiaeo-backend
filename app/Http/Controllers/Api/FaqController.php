@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Billing\Services\CreditConsumptionService;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\FaqGenerationRequest;
 use App\Services\ApiResponseModifier;
@@ -12,24 +13,27 @@ use Illuminate\Http\JsonResponse;
 class FaqController extends Controller
 {
     use ValidatesResourceOwnership;
-    protected FaqGeneratorService $faqService;
-    protected ApiResponseModifier $responseModifier;
 
-    public function __construct(FaqGeneratorService $faqService, ApiResponseModifier $responseModifier)
-    {
-        $this->faqService = $faqService;
-        $this->responseModifier = $responseModifier;
-    }
+    public function __construct(
+        protected FaqGeneratorService $faqService,
+        protected ApiResponseModifier $responseModifier,
+        protected CreditConsumptionService $creditConsumption
+    ) {}
 
     public function generate(FaqGenerationRequest $request): JsonResponse
     {
         try {
+            $user = $request->user();
+            $cost = $this->creditConsumption->assertCanConsume($user, 'faq_generator');
+
             $validated = $request->validated();
 
             $responseDTO = $this->faqService->generateFaqs(
                 $validated['input'],
                 $validated['options'] ?? []
             );
+
+            $this->creditConsumption->recordUsage($user, 'faq_generator', $cost);
 
             return $this->responseModifier
                 ->setData($responseDTO->toArray())
@@ -59,6 +63,8 @@ class FaqController extends Controller
     public function createTask(FaqGenerationRequest $request): JsonResponse
     {
         try {
+            $this->creditConsumption->assertCanConsume($request->user(), 'faq_generator');
+
             $validated = $request->validated();
 
             $task = $this->faqService->createFaqTask(

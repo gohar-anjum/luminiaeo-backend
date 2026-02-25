@@ -179,6 +179,11 @@ class CitationChunkJob implements ShouldQueue
 
         if (count($updatedTask->results['by_query'] ?? []) >= $this->totalQueries) {
             $service->finalizeTask($updatedTask);
+            $citationUser = $updatedTask->user;
+            if ($citationUser) {
+                app(\App\Domain\Billing\Services\CreditConsumptionService::class)
+                    ->recordUsage($citationUser, 'citation_feature');
+            }
         }
     }
 

@@ -70,6 +70,15 @@ class Handler extends ExceptionHandler
             $payload['message'] = $e->getMessage();
         }
 
+        elseif ($e instanceof \App\Domain\Billing\Exceptions\InsufficientCreditsException ||
+            $e instanceof \App\Domain\Billing\Exceptions\BillingException ||
+            $e instanceof \App\Domain\Billing\Exceptions\FeatureNotActiveException) {
+            $status = $e->getStatusCode();
+            $payload['status'] = $status;
+            $payload['error_code'] = $e->getErrorCode();
+            $payload['message'] = $e->getMessage();
+        }
+
         else {
             $errorId = uniqid('err_', true);
             

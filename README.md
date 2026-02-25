@@ -126,6 +126,11 @@ FAQ_GENERATOR_TIMEOUT=60
 FAQ_DEFAULT_LANGUAGE=en
 FAQ_DEFAULT_LOCATION=2840
 
+# Billing (Stripe credits) – required for checkout and webhooks
+STRIPE_SECRET=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+FRONTEND_URL=https://your-frontend-domain.com
+
 # External APIs
 SERP_API_KEY=your_serp_api_key
 ALSOASKED_API_KEY=your_alsoasked_key
@@ -539,6 +544,7 @@ php artisan horizon
 
 ### Technical Documentation
 
+- **`docs/BILLING_SETUP.md`** - Billing and Stripe webhook setup (env vars, queue worker, Stripe Dashboard).
 - **`TECHNICAL_SYSTEM_FLOW.md`** - Comprehensive technical documentation covering:
   - Complete feature flows (frontend → backend → database)
   - API endpoints with request/response examples

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Billing\Contracts\WalletServiceInterface;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ForgotPasswordRequest;
 use App\Http\Requests\RegisterRequest;
@@ -20,12 +21,10 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
-    private ApiResponseModifier $responseModifier;
-
-    public function __construct(ApiResponseModifier $responseModifier)
-    {
-        $this->responseModifier = $responseModifier;
-    }
+    public function __construct(
+        private ApiResponseModifier $responseModifier,
+        private WalletServiceInterface $walletService
+    ) {}
 
     public function login(Request $request)
     {
@@ -44,11 +43,19 @@ class AuthController extends Controller
             return $this->responseModifier->setMessage($validate->errors()->first())->setResponseCode(422)->response();
         }
         $validated = $validate->validated();
-        User::create([
+        $user = User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
             'password' => $validated['password'],
         ]);
+
+        $signupBonus = (int) config('billing.signup_bonus_credits', 10);
+        if ($signupBonus > 0) {
+            $this->walletService->addCredits($user, $signupBonus, 'bonus', [
+                'metadata' => ['reason' => 'signup_bonus'],
+            ]);
+        }
+
         return $this->responseModifier->setMessage('User created successfully')->response();
     }
 

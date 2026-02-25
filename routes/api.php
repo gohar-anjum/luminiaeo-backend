@@ -22,6 +22,9 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword'])->name('
 
 Route::get('/health', [\App\Http\Controllers\Api\HealthController::class, 'check'])->name('health.check');
 
+// Stripe webhook (no auth; verified via Stripe-Signature)
+Route::post('/billing/webhook', [\App\Http\Controllers\Api\StripeWebhookController::class, 'handle'])->name('billing.webhook');
+
 // Location codes API (public - no auth required for reading)
 Route::prefix('location-codes')->group(function () {
     Route::get('/', [LocationCodeController::class, 'index'])->name('location-codes.index');
@@ -99,5 +102,14 @@ Route::middleware('auth:sanctum')->group(function () {
             ->name('faq.task.create');
         Route::get('/task/{taskId}', [\App\Http\Controllers\Api\FaqController::class, 'getTaskStatus'])
             ->name('faq.task.status');
+    });
+
+    // Billing (credits, checkout, features)
+    Route::prefix('billing')->group(function () {
+        Route::get('/balance', [\App\Http\Controllers\Api\BillingController::class, 'balance'])->name('billing.balance');
+        Route::get('/features', [\App\Http\Controllers\Api\BillingController::class, 'features'])->name('billing.features');
+        Route::get('/purchase-rules', [\App\Http\Controllers\Api\BillingController::class, 'purchaseRules'])->name('billing.purchase-rules');
+        Route::post('/checkout', [\App\Http\Controllers\Api\BillingController::class, 'createCheckout'])->name('billing.checkout');
+        Route::post('/confirm-session', [\App\Http\Controllers\Api\BillingController::class, 'confirmSession'])->name('billing.confirm-session');
     });
 });

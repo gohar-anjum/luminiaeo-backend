@@ -348,6 +348,7 @@ class ProcessFaqTask implements ShouldQueue
                 // Update existing FAQ with combined answers
                 $existingFaq->update(['faqs' => $allFaqs]);
                 $task->markAsCompleted($existingFaq->id);
+                $this->recordFaqUsage($task);
                 return;
             }
         }
@@ -366,5 +367,15 @@ class ProcessFaqTask implements ShouldQueue
         }
 
         $task->markAsCompleted($faqRecord->id);
+        $this->recordFaqUsage($task);
+    }
+
+    protected function recordFaqUsage(FaqTask $task): void
+    {
+        $user = $task->user;
+        if ($user) {
+            app(\App\Domain\Billing\Services\CreditConsumptionService::class)
+                ->recordUsage($user, 'faq_generator');
+        }
     }
 }
