@@ -9,6 +9,7 @@ use App\Support\ReservationCompletion;
 use App\Exceptions\PageAnalysisException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class MetaOptimizerController extends Controller
 {
@@ -50,6 +51,7 @@ class MetaOptimizerController extends Controller
                 ->setResponseCode(422)
                 ->response();
         } catch (\Exception $e) {
+            Log::info($e->getMessage());
             return $this->responseModifier
                 ->setMessage('Failed to optimize meta tags')
                 ->setResponseCode(500)
