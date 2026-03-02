@@ -9,7 +9,9 @@ def extract_content(html: str):
     title = soup.title.string.strip() if soup.title else None
 
     description_tag = soup.find("meta", attrs={"name": "description"})
-    description = description_tag["content"].strip() if description_tag else None
+    description = None
+    if description_tag and description_tag.get("content"):
+        description = description_tag["content"].strip()
 
     headings = [h.get_text(strip=True) for h in soup.find_all(["h1","h2","h3","h4","h5","h6"])]
 
