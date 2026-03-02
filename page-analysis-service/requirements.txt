@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+httpx
+beautifulsoup4
+sentence-transformers
+keybert
+redis
+python-dotenv
+pydantic
+scikit-learn
+prometheus-fastapi-instrumentator
