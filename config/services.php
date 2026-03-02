@@ -130,4 +130,10 @@ return [
         'cache_ttl' => env('ALSOASKED_CACHE_TTL', 86400),
     ],
 
+    'page_analysis' => [
+        'url' => env('PAGE_ANALYSIS_SERVICE_URL', 'http://localhost:8004'),
+        'timeout' => (int) env('PAGE_ANALYSIS_TIMEOUT', 15),
+        'cache_ttl' => (int) env('PAGE_ANALYSIS_CACHE_TTL', 86400), // 24 hours
+    ],
+
 ];

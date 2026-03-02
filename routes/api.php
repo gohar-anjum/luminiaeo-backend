@@ -111,6 +111,20 @@ Route::middleware('auth:sanctum')->group(function () {
             ->name('faq.task.status');
     });
 
+    Route::prefix('page-analysis')->middleware('throttle:30,1')->group(function () {
+        Route::post('/meta-optimize', [\App\Http\Controllers\Api\PageAnalysis\MetaOptimizerController::class, 'optimize'])
+            ->middleware('credit.deduct')
+            ->name('page-analysis.meta-optimize');
+        Route::get('/meta-optimize/history', [\App\Http\Controllers\Api\PageAnalysis\MetaOptimizerController::class, 'history'])
+            ->name('page-analysis.meta-optimize.history');
+
+        Route::post('/semantic-score', [\App\Http\Controllers\Api\PageAnalysis\SemanticScoreController::class, 'evaluate'])
+            ->middleware('credit.deduct')
+            ->name('page-analysis.semantic-score');
+        Route::get('/semantic-score/history', [\App\Http\Controllers\Api\PageAnalysis\SemanticScoreController::class, 'history'])
+            ->name('page-analysis.semantic-score.history');
+    });
+
     // Billing (credits, checkout, features)
     Route::prefix('billing')->group(function () {
         Route::get('/balance', [\App\Http\Controllers\Api\BillingController::class, 'balance'])->name('billing.balance');

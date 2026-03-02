@@ -69,6 +69,7 @@ services:
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
       - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
+      - PAGE_ANALYSIS_SERVICE_URL=http://page-analysis:8004
 
   # Nginx Web Server
   nginx:
@@ -119,6 +120,7 @@ services:
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
       - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
+      - PAGE_ANALYSIS_SERVICE_URL=http://page-analysis:8004
 
   # Laravel Horizon (Queue Dashboard & Supervisor)
   horizon:
@@ -152,6 +154,7 @@ services:
       - KEYWORD_CLUSTERING_SERVICE_URL=http://clustering:8001
       - PBN_DETECTOR_URL=http://pbn-detector:8081
       - KEYWORD_INTENT_SERVICE_URL=http://keyword-intent:8002
+      - PAGE_ANALYSIS_SERVICE_URL=http://page-analysis:8004
 
   # Keyword Clustering Service (Python)
   clustering:
@@ -215,6 +218,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # Page Analysis Service (Python / FastAPI - meta optimizer, semantic score)
+  page-analysis:
+    build:
+      context: ./page-analysis-service
+      dockerfile: Dockerfile
+    container_name: luminiaeo_page_analysis
+    restart: unless-stopped
+    ports:
+      - "${PAGE_ANALYSIS_PORT:-8004}:8004"
+    networks:
+      - luminiaeo-network
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CACHE_TTL=${PAGE_ANALYSIS_CACHE_TTL:-86400}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # PBN Detector Service (Python)
   pbn-detector:

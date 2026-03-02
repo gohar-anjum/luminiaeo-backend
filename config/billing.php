@@ -52,6 +52,8 @@ return [
         'seo.backlinks.submit' => 'backlink_feature',
         'faq.generate' => 'faq_generator',
         'faq.task.create' => 'faq_generator',
+        'page-analysis.meta-optimize' => 'meta_tag_optimizer',
+        'page-analysis.semantic-score' => 'semantic_score_checker',
     ],
 
 ];

@@ -12,13 +12,26 @@ final class ReservationCompletion
 {
     public static function run(Request $request, callable $action): mixed
     {
+        return self::runWithCondition($request, $action, fn () => true);
+    }
+
+    /**
+     * Run action and conditionally complete or reverse reservation.
+     * When $shouldComplete($result) is false, reverse instead of complete (e.g. when returning cached).
+     */
+    public static function runWithCondition(Request $request, callable $action, callable $shouldComplete): mixed
+    {
         $reservation = $request->attributes->get('credit_reservation');
         $reservationId = $reservation['transaction_id'] ?? null;
 
         try {
             $result = $action();
             if ($reservationId) {
-                app(WalletServiceInterface::class)->completeReservation($reservationId);
+                if ($shouldComplete($result)) {
+                    app(WalletServiceInterface::class)->completeReservation($reservationId);
+                } else {
+                    app(WalletServiceInterface::class)->reverseReservation($reservationId);
+                }
             }
             return $result;
         } catch (\Throwable $e) {

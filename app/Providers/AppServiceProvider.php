@@ -9,15 +9,19 @@ use App\Observers\CitationTaskObserver;
 use App\Observers\FaqTaskObserver;
 use App\Observers\KeywordResearchJobObserver;
 use App\Services\CacheService;
+use App\Services\PageAnalysis\AnalysisClient;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-
         $this->app->singleton(CacheService::class, function ($app) {
             return new CacheService();
+        });
+
+        $this->app->singleton(AnalysisClient::class, function ($app) {
+            return AnalysisClient::fromConfig();
         });
     }
 
