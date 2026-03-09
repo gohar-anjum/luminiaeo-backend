@@ -123,6 +123,12 @@ Route::middleware('auth:sanctum')->group(function () {
             ->name('page-analysis.semantic-score');
         Route::get('/semantic-score/history', [\App\Http\Controllers\Api\PageAnalysis\SemanticScoreController::class, 'history'])
             ->name('page-analysis.semantic-score.history');
+
+        Route::post('/content-outline', [\App\Http\Controllers\Api\PageAnalysis\ContentOutlineController::class, 'generate'])
+            ->middleware('credit.deduct')
+            ->name('page-analysis.content-outline');
+        Route::get('/content-outline/history', [\App\Http\Controllers\Api\PageAnalysis\ContentOutlineController::class, 'history'])
+            ->name('page-analysis.content-outline.history');
     });
 
     // Billing (credits, checkout, features)

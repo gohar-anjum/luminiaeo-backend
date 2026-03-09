@@ -54,6 +54,7 @@ return [
         'faq.task.create' => 'faq_generator',
         'page-analysis.meta-optimize' => 'meta_tag_optimizer',
         'page-analysis.semantic-score' => 'semantic_score_checker',
+        'page-analysis.content-outline' => 'semantic_content_generator',
     ],
 
 ];

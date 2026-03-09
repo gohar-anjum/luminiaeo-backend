@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\PageAnalysis;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PageAnalysis\MetaOptimizeRequest;
 use App\Services\ApiResponseModifier;
 use App\Services\PageAnalysis\MetaOptimizerService;
 use App\Support\ReservationCompletion;
@@ -18,21 +19,15 @@ class MetaOptimizerController extends Controller
         protected ApiResponseModifier $responseModifier,
     ) {}
 
-    /**
-     * Optimize meta tags for a URL.
-     * POST /api/page-analysis/meta-optimize
-     * Body: { "url": "https://example.com" }
-     */
-    public function optimize(Request $request): JsonResponse
+    public function optimize(MetaOptimizeRequest $request): JsonResponse
     {
-        $request->validate([
-            'url' => ['required', 'url', 'max:2048'],
-        ]);
-
         try {
             $result = ReservationCompletion::runWithCondition(
                 $request,
-                fn () => $this->metaOptimizer->handle($request->input('url')),
+                fn () => $this->metaOptimizer->handle(
+                    $request->input('url'),
+                    $request->input('keyword'),
+                ),
                 fn ($r) => !($r['from_cache'] ?? false)
             );
 
@@ -59,18 +54,14 @@ class MetaOptimizerController extends Controller
         }
     }
 
-    /**
-     * Get meta analysis history for the authenticated user.
-     */
     public function history(Request $request): JsonResponse
     {
         $analyses = \App\Models\MetaAnalysis::where('user_id', $request->user()->id)
             ->orderByDesc('analyzed_at')
-            ->limit(50)
-            ->get();
+            ->paginate($request->integer('per_page', 20));
 
         return $this->responseModifier
-            ->setData(['analyses' => $analyses])
+            ->setData($analyses)
             ->setMessage('Meta analysis history retrieved')
             ->response();
     }

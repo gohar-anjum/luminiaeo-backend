@@ -9,15 +9,16 @@ redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 def generate_cache_key(
     url: str,
     analysis: list,
+    extra: str = "",
 ) -> str:
     """
-    Cache key includes URL and sorted analysis types.
-    Uses SHA256 signature for consistency.
+    Cache key includes URL, sorted analysis types, and optional extra context (e.g. user keyword).
     """
     raw = json.dumps(
         {
             "url": url,
             "analysis": sorted(analysis),
+            "extra": extra,
         },
         sort_keys=True,
     )

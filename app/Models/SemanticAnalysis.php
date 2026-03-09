@@ -10,14 +10,17 @@ class SemanticAnalysis extends Model
     protected $fillable = [
         'user_id',
         'source_url',
+        'target_keyword',
         'comparison_type',
         'comparison_value',
         'semantic_score',
+        'keyword_scores',
         'analyzed_at',
     ];
 
     protected $casts = [
         'semantic_score' => 'float',
+        'keyword_scores' => 'array',
         'analyzed_at' => 'datetime',
     ];
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\PageAnalysis;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PageAnalysis\SemanticScoreRequest;
 use App\Services\ApiResponseModifier;
 use App\Services\PageAnalysis\SemanticScoreService;
 use App\Support\ReservationCompletion;
@@ -16,25 +17,21 @@ class SemanticScoreController extends Controller
         protected ApiResponseModifier $responseModifier,
     ) {}
 
-    /**
-     * Evaluate how well a page semantically covers its primary topic.
-     * POST /api/page-analysis/semantic-score
-     * Body: { "url": "https://..." }
-     */
-    public function evaluate(Request $request): JsonResponse
+    public function evaluate(SemanticScoreRequest $request): JsonResponse
     {
-        $request->validate([
-            'url' => ['required', 'url', 'max:2048'],
-        ]);
-
         try {
-            $score = ReservationCompletion::run($request, fn () => $this->semanticScoreService->evaluate(
-                $request->input('url'),
-            ));
+            $result = ReservationCompletion::runWithCondition(
+                $request,
+                fn () => $this->semanticScoreService->evaluate(
+                    $request->input('url'),
+                    $request->input('keyword'),
+                ),
+                fn ($r) => !($r['from_cache'] ?? false)
+            );
 
             return $this->responseModifier
-                ->setData(['semantic_score' => $score])
-                ->setMessage('Semantic score computed')
+                ->setData($result)
+                ->setMessage($result['from_cache'] ?? false ? 'Semantic score from cache' : 'Semantic score computed')
                 ->response();
         } catch (\Illuminate\Http\Client\RequestException $e) {
             return $this->responseModifier
@@ -54,18 +51,14 @@ class SemanticScoreController extends Controller
         }
     }
 
-    /**
-     * Get semantic analysis history for the authenticated user.
-     */
     public function history(Request $request): JsonResponse
     {
         $analyses = \App\Models\SemanticAnalysis::where('user_id', $request->user()->id)
             ->orderByDesc('analyzed_at')
-            ->limit(50)
-            ->get();
+            ->paginate($request->integer('per_page', 20));
 
         return $this->responseModifier
-            ->setData(['analyses' => $analyses])
+            ->setData($analyses)
             ->setMessage('Semantic analysis history retrieved')
             ->response();
     }

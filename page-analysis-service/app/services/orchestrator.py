@@ -16,9 +16,11 @@ logger = logging.getLogger(__name__)
 
 async def analyze_page(request) -> dict:
     """Orchestrate page analysis with cache, all analysis types, and intent."""
+    user_keyword = getattr(request, "keyword", None) or ""
     cache_key = generate_cache_key(
         url=str(request.url),
         analysis=request.analysis,
+        extra=user_keyword.strip().lower() if user_keyword else "",
     )
 
     cached = await get_cache(cache_key)
@@ -50,7 +52,6 @@ async def analyze_page(request) -> dict:
             analysis_result["embedding"] = page_embedding
 
     if "semantic_score" in request.analysis:
-        # Ensure we have keywords to derive primary topic
         if "keywords" not in analysis_result:
             analysis_result["keywords"] = extract_keywords(
                 content["text"],
@@ -58,21 +59,50 @@ async def analyze_page(request) -> dict:
             )
 
         keywords = analysis_result["keywords"] or []
-        if keywords:
+
+        # Use user-provided keyword as primary if supplied
+        user_keyword = getattr(request, "keyword", None)
+        if user_keyword and user_keyword.strip():
+            primary_keyword = user_keyword.strip()
+        elif keywords:
             first = keywords[0]
             primary_keyword = first["phrase"] if isinstance(first, dict) else str(first)
         else:
-            # Fallbacks if keyword extraction fails
             primary_keyword = content["title"] or (content["headings"][0] if content["headings"] else "page")
-
-        keyword_embedding = generate_embedding(primary_keyword)
 
         if page_embedding is None:
             page_embedding = generate_embedding(content["text"])
 
+        keyword_embedding = generate_embedding(primary_keyword)
         score = compute_similarity(page_embedding, keyword_embedding)
         analysis_result["semantic_score"] = score
         analysis_result["primary_keyword"] = primary_keyword
+
+        # Per-keyword scores for all extracted keywords
+        keyword_scores = []
+        for kw in keywords:
+            phrase = kw["phrase"] if isinstance(kw, dict) else str(kw)
+            kw_score = kw.get("score", 0) if isinstance(kw, dict) else 0
+            kw_embedding = generate_embedding(phrase)
+            semantic = compute_similarity(page_embedding, kw_embedding)
+            keyword_scores.append({
+                "phrase": phrase,
+                "extraction_score": round(kw_score, 4),
+                "semantic_score": round(semantic, 4),
+            })
+
+        # Include user keyword in the scores if not already present
+        if user_keyword and user_keyword.strip():
+            existing_phrases = {s["phrase"].lower() for s in keyword_scores}
+            if primary_keyword.lower() not in existing_phrases:
+                keyword_scores.insert(0, {
+                    "phrase": primary_keyword,
+                    "extraction_score": 0,
+                    "semantic_score": round(score, 4),
+                })
+
+        keyword_scores.sort(key=lambda x: x["semantic_score"], reverse=True)
+        analysis_result["keyword_scores"] = keyword_scores
 
     result = {
         "url": str(request.url),

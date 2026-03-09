@@ -10,10 +10,12 @@ class MetaAnalysis extends Model
     protected $fillable = [
         'user_id',
         'url',
+        'target_keyword',
         'original_title',
         'original_description',
         'suggested_title',
         'suggested_description',
+        'suggestions',
         'keywords',
         'intent',
         'word_count',
@@ -22,6 +24,7 @@ class MetaAnalysis extends Model
 
     protected $casts = [
         'keywords' => 'array',
+        'suggestions' => 'array',
         'analyzed_at' => 'datetime',
     ];
 
