@@ -392,14 +392,40 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             return;
         }
 
-        foreach ($backlinks as $dto) {
-            if (empty($dto->sourceUrl)) {
-                continue;
-            }
+        $domains = collect($backlinks)
+            ->pluck('sourceDomain')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
-            $raw = $this->safeBrowsing->checkUrl($dto->sourceUrl);
-            $signals = $this->safeBrowsing->extractSignals($raw);
-            $dto->applySafeBrowsing($signals);
+        if (empty($domains)) {
+            return;
+        }
+
+        $safeBrowsingResults = [];
+        foreach ($domains as $sourceDomain) {
+            try {
+                $url = str_starts_with($sourceDomain, 'http')
+                    ? $sourceDomain
+                    : 'https://' . $sourceDomain;
+
+                $raw = $this->safeBrowsing->checkUrl($url);
+                $signals = $this->safeBrowsing->extractSignals($raw);
+                $safeBrowsingResults[$sourceDomain] = $signals;
+            } catch (\Exception $e) {
+                Log::warning('Safe Browsing check failed for domain', [
+                    'domain' => $sourceDomain,
+                    'error' => $e->getMessage(),
+                ]);
+                $safeBrowsingResults[$sourceDomain] = [];
+            }
+        }
+
+        foreach ($backlinks as $dto) {
+            if (!empty($dto->sourceDomain) && isset($safeBrowsingResults[$dto->sourceDomain])) {
+                $dto->applySafeBrowsing($safeBrowsingResults[$dto->sourceDomain]);
+            }
         }
     }
 

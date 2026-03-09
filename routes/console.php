@@ -28,3 +28,15 @@ Schedule::job(new \App\Jobs\SyncKeywordCacheJob(
     refreshExpired: false,
     refreshClusters: false
 ))->everySixHours()->withoutOverlapping();
+
+Schedule::command('api-cache:purge')
+    ->dailyAt('03:30')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->runInBackground();
+
+Schedule::command('api-cache:purge --logs')
+    ->weeklyOn(0, '04:00')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->runInBackground();

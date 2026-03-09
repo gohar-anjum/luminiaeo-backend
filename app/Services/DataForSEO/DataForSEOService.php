@@ -5,6 +5,7 @@ namespace App\Services\DataForSEO;
 use App\DTOs\SearchVolumeDTO;
 use App\Exceptions\DataForSEOException;
 use App\Interfaces\KeywordCacheRepositoryInterface;
+use App\Services\ApiCache\ApiCacheService;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -18,14 +19,16 @@ class DataForSEOService
     protected string $password;
     protected int $cacheTTL;
     protected KeywordCacheRepositoryInterface $cacheRepository;
+    protected ApiCacheService $apiCacheService;
 
-    public function __construct(KeywordCacheRepositoryInterface $cacheRepository)
+    public function __construct(KeywordCacheRepositoryInterface $cacheRepository, ?ApiCacheService $apiCacheService = null)
     {
         $this->baseUrl = '';
         $this->login = '';
         $this->password = '';
         $this->cacheTTL = config('services.dataforseo.cache_ttl', 86400);
         $this->cacheRepository = $cacheRepository;
+        $this->apiCacheService = $apiCacheService ?? app(ApiCacheService::class);
     }
 
     protected function ensureConfigured(): void
@@ -324,7 +327,7 @@ class DataForSEOService
             throw new InvalidArgumentException('Target website/domain cannot be empty');
         }
 
-        $cacheKey = $this->getCacheKey('keywords_for_site', [
+        $redisCacheKey = $this->getCacheKey('keywords_for_site', [
             'target' => $target,
             'location_code' => $locationCode,
             'language_code' => $languageCode,
@@ -334,15 +337,13 @@ class DataForSEOService
             'include_serp_info' => $includeSerpInfo,
         ]);
 
-        if (Cache::has($cacheKey)) {
-            $results = Cache::get($cacheKey);
-            $maxLimit = config('services.dataforseo.keywords_for_site.max_limit', 1000);
-            $limit = min($limit, $maxLimit);
-            return array_slice($results, 0, $limit);
-        }
-
         $maxLimit = config('services.dataforseo.keywords_for_site.max_limit', 1000);
         $limit = min($limit, $maxLimit);
+
+        if (Cache::has($redisCacheKey)) {
+            $results = Cache::get($redisCacheKey);
+            return array_slice($results, 0, $limit);
+        }
 
         $taskData = [
             'target' => $target,
@@ -354,16 +355,12 @@ class DataForSEOService
         if ($tag !== null) {
             $taskData['tag'] = $tag;
         }
-        
+
         if ($limit > 0) {
             $taskData['limit'] = $limit;
         }
 
-        $payload = [
-            'data' => [
-                $taskData
-            ]
-        ];
+        $payload = ['data' => [$taskData]];
 
         if (!$this->shouldCallAPI()) {
             throw new DataForSEOException(
@@ -374,54 +371,51 @@ class DataForSEOService
         }
 
         try {
-            $httpResponse = $this->client()
-                ->post('/keywords_data/google_ads/keywords_for_site/live', $payload)
-                ->throw();
-            
-            $this->recordAPISuccess();
+            $cacheResult = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'dataforseo',
+                feature: 'keywords_for_site',
+                queryParams: ['target' => $target, 'location_code' => $locationCode, 'language_code' => $languageCode, 'search_partners' => $searchPartners],
+                apiFetcher: function () use ($payload) {
+                    $httpResponse = $this->client()
+                        ->post('/keywords_data/google_ads/keywords_for_site/live', $payload)
+                        ->throw();
 
-            $response = $httpResponse->json();
+                    $response = $httpResponse->json();
 
-            if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
-                Log::error('Invalid API response structure: missing tasks', ['response' => $response]);
-                throw new DataForSEOException(
-                    'Invalid API response: missing tasks',
-                    500,
-                    'INVALID_RESPONSE'
-                );
-            }
+                    if (!isset($response['tasks'][0])) {
+                        $this->recordAPIFailure();
+                        throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
+                    }
 
-            $task = $response['tasks'][0];
+                    $task = $response['tasks'][0];
 
-            if (isset($task['status_code']) && $task['status_code'] !== 20000) {
-                $errorMessage = $task['status_message'] ?? 'Unknown error';
-                Log::error('DataForSEO API error', [
-                    'status_code' => $task['status_code'],
-                    'status_message' => $errorMessage,
-                ]);
-                $this->recordAPIFailure();
-                throw new DataForSEOException(
-                    'DataForSEO API error: ' . $errorMessage,
-                    $task['status_code'] ?? 500,
-                    'API_ERROR'
-                );
-            }
+                    if (isset($task['status_code']) && $task['status_code'] !== 20000) {
+                        $this->recordAPIFailure();
+                        throw new DataForSEOException(
+                            'DataForSEO API error: ' . ($task['status_message'] ?? 'Unknown error'),
+                            $task['status_code'] ?? 500,
+                            'API_ERROR'
+                        );
+                    }
 
-            $this->recordAPISuccess();
+                    $this->recordAPISuccess();
+                    return $task['result'] ?? [];
+                },
+            );
 
-            if (!isset($task['result']) || !is_array($task['result']) || empty($task['result'])) {
+            $items = $cacheResult->payload();
+
+            if (empty($items)) {
                 return [];
             }
 
-            $items = $task['result'];
+            $results = array_map(fn ($item) => \App\DTOs\KeywordsForSiteDTO::fromArray($item), $items);
 
-            $results = array_map(function ($item) {
-                return \App\DTOs\KeywordsForSiteDTO::fromArray($item);
-            }, $items);
+            Cache::put($redisCacheKey, $results, now()->addSeconds($this->cacheTTL));
 
-            Cache::put($cacheKey, $results, now()->addSeconds($this->cacheTTL));
-
-            $this->cacheKeywordsInDatabase($results, $languageCode, $locationCode);
+            if (!$cacheResult->wasCacheHit) {
+                $this->cacheKeywordsInDatabase($results, $languageCode, $locationCode);
+            }
 
             return array_slice($results, 0, $limit);
         } catch (RequestException $e) {
@@ -511,10 +505,20 @@ class DataForSEOService
     ): array {
         $defaultLimit = config('services.dataforseo.keyword_ideas.default_limit', 100);
         $maxLimit = config('services.dataforseo.keyword_ideas.max_limit', 1000);
-        
+
         $maxResults = $maxResults ?? $defaultLimit;
         $maxResults = min($maxResults, $maxLimit);
-        
+
+        $redisCacheKey = $this->getCacheKey('keyword_ideas', [
+            'seed_keyword' => $seedKeyword,
+            'language_code' => $languageCode,
+            'location_code' => $locationCode,
+        ]);
+
+        if (Cache::has($redisCacheKey)) {
+            return array_slice(Cache::get($redisCacheKey), 0, $maxResults);
+        }
+
         $payload = [
             [
                 'keywords' => [$seedKeyword],
@@ -524,56 +528,56 @@ class DataForSEOService
         ];
 
         try {
-            $httpResponse = $this->client()
-                ->post('/keywords_data/google_ads/keywords_for_keywords/live', $payload)
-                ->throw();
+            $cacheResult = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'dataforseo',
+                feature: 'keyword_ideas',
+                queryParams: ['seed_keyword' => $seedKeyword, 'language_code' => $languageCode, 'location_code' => $locationCode],
+                apiFetcher: function () use ($payload) {
+                    $httpResponse = $this->client()
+                        ->post('/keywords_data/google_ads/keywords_for_keywords/live', $payload)
+                        ->throw();
 
-            $response = $httpResponse->json();
+                    $response = $httpResponse->json();
 
-            if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
-                throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
-            }
+                    if (!isset($response['tasks'][0])) {
+                        throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
+                    }
 
-            $task = $response['tasks'][0];
+                    $task = $response['tasks'][0];
 
-            if (isset($task['status_code']) && $task['status_code'] !== 20000) {
-                $this->recordAPIFailure();
-                throw new DataForSEOException(
-                    'DataForSEO API error: ' . ($task['status_message'] ?? 'Unknown error'),
-                    $task['status_code'] ?? 500,
-                    'API_ERROR'
-                );
-            }
+                    if (isset($task['status_code']) && $task['status_code'] !== 20000) {
+                        $this->recordAPIFailure();
+                        throw new DataForSEOException(
+                            'DataForSEO API error: ' . ($task['status_message'] ?? 'Unknown error'),
+                            $task['status_code'] ?? 500,
+                            'API_ERROR'
+                        );
+                    }
 
-            $this->recordAPISuccess();
+                    $this->recordAPISuccess();
+                    return $task['result'] ?? [];
+                },
+            );
 
-            if (!isset($task['result']) || !is_array($task['result']) || empty($task['result'])) {
-                return [];
-            }
+            $items = $cacheResult->payload();
 
-            $items = $task['result'] ?? [];
-            
             if (!is_array($items)) {
                 $items = [];
             }
-            
+
             if (!empty($items) && isset($items['keyword']) && !isset($items[0])) {
                 $items = [$items];
             }
-            
+
             $results = [];
 
-            foreach ($items as $index => $item) {
-                if ($maxResults !== null && count($results) >= $maxResults) {
-                    break;
-                }
-
+            foreach ($items as $item) {
                 if (!is_array($item)) {
                     continue;
                 }
 
-                $keywordValue = isset($item['keyword']) ? trim((string)$item['keyword']) : '';
-                
+                $keywordValue = isset($item['keyword']) ? trim((string) $item['keyword']) : '';
+
                 if (empty($keywordValue)) {
                     continue;
                 }
@@ -588,7 +592,7 @@ class DataForSEOService
                         default => null,
                     };
                 }
-                
+
                 if ($competitionValue === null && isset($item['competition_index'])) {
                     $competitionValue = (float) $item['competition_index'] / 100.0;
                 }
@@ -607,7 +611,9 @@ class DataForSEOService
                 );
             }
 
-            return $results;
+            Cache::put($redisCacheKey, $results, now()->addSeconds($this->cacheTTL));
+
+            return array_slice($results, 0, $maxResults);
         } catch (RequestException $e) {
             Log::error('DataForSEO keyword planner API request failed', [
                 'seed_keyword' => $seedKeyword,
@@ -665,6 +671,18 @@ class DataForSEOService
         $maxLimit = config('services.dataforseo.keyword_ideas.max_limit', 1000);
         $limit = min($limit, $maxLimit);
 
+        $redisCacheKey = $this->getCacheKey('keyword_ideas_labs', [
+            'keywords' => $keywordsArray,
+            'language_code' => $languageCode,
+            'location_code' => $locationCode,
+            'include_serp_info' => $includeSerpInfo,
+            'filters' => $filters,
+        ]);
+
+        if (Cache::has($redisCacheKey)) {
+            return array_slice(Cache::get($redisCacheKey), 0, $limit);
+        }
+
         $taskPayload = [
             'keywords' => array_values($keywordsArray),
             'location_code' => (int) $locationCode,
@@ -677,52 +695,54 @@ class DataForSEOService
         }
 
         $payload = [$taskPayload];
-
-        // Path is relative to base_url (https://api.dataforseo.com/v3) → no leading /v3
         $path = '/dataforseo_labs/google/keyword_ideas/live';
 
-        Log::debug('DataForSEO Labs keyword_ideas request', [
-            'url' => $this->baseUrl . $path,
-            'body' => $payload,
-        ]);
-
         try {
-            $httpResponse = $this->client()
-                ->post($path, $payload)
-                ->throw();
+            $cacheResult = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'dataforseo',
+                feature: 'keyword_ideas_labs',
+                queryParams: ['keywords' => $keywordsArray, 'language_code' => $languageCode, 'location_code' => $locationCode, 'filters' => $filters],
+                apiFetcher: function () use ($path, $payload, $keywordsArray) {
+                    Log::debug('DataForSEO Labs keyword_ideas request', [
+                        'url' => $this->baseUrl . $path,
+                        'body' => $payload,
+                    ]);
 
-            $response = $httpResponse->json();
+                    $httpResponse = $this->client()
+                        ->post($path, $payload)
+                        ->throw();
 
-            Log::debug('DataForSEO Labs keyword_ideas response', [
-                'response' => $response,
-                'status' => $httpResponse->status(),
-                'seeds' => $keywordsArray,
-            ]);
+                    $response = $httpResponse->json();
 
-            if (!isset($response['tasks']) || !is_array($response['tasks']) || empty($response['tasks'])) {
-                $this->recordAPIFailure();
-                throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
-            }
+                    Log::debug('DataForSEO Labs keyword_ideas response', [
+                        'status' => $httpResponse->status(),
+                        'seeds' => $keywordsArray,
+                    ]);
 
-            $task = $response['tasks'][0];
+                    if (!isset($response['tasks'][0])) {
+                        $this->recordAPIFailure();
+                        throw new DataForSEOException('Invalid API response: missing tasks', 500, 'INVALID_RESPONSE');
+                    }
 
-            if (isset($task['status_code']) && $task['status_code'] !== 20000) {
-                $this->recordAPIFailure();
-                throw new DataForSEOException(
-                    'DataForSEO Labs API error: ' . ($task['status_message'] ?? 'Unknown error'),
-                    $task['status_code'] ?? 500,
-                    'API_ERROR'
-                );
-            }
+                    $task = $response['tasks'][0];
 
-            $this->recordAPISuccess();
+                    if (isset($task['status_code']) && $task['status_code'] !== 20000) {
+                        $this->recordAPIFailure();
+                        throw new DataForSEOException(
+                            'DataForSEO Labs API error: ' . ($task['status_message'] ?? 'Unknown error'),
+                            $task['status_code'] ?? 500,
+                            'API_ERROR'
+                        );
+                    }
 
-            if (!isset($task['result']) || !is_array($task['result']) || empty($task['result'])) {
-                return [];
-            }
+                    $this->recordAPISuccess();
 
-            $resultBlock = $task['result'][0] ?? null;
-            $items = is_array($resultBlock) ? ($resultBlock['items'] ?? []) : [];
+                    $resultBlock = $task['result'][0] ?? null;
+                    return is_array($resultBlock) ? ($resultBlock['items'] ?? []) : [];
+                },
+            );
+
+            $items = $cacheResult->payload();
 
             if (!is_array($items)) {
                 $items = [];
@@ -795,6 +815,8 @@ class DataForSEOService
                     ],
                 );
             }
+
+            Cache::put($redisCacheKey, $results, now()->addSeconds($this->cacheTTL));
 
             return $results;
         } catch (RequestException $e) {

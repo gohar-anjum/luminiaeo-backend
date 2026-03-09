@@ -2,6 +2,7 @@
 
 namespace App\Services\SafeBrowsing;
 
+use App\Services\ApiCache\ApiCacheService;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
@@ -15,14 +16,16 @@ class SafeBrowsingService
     protected int $timeout;
     protected int $cacheTtl;
     protected CacheRepository $cache;
+    protected ApiCacheService $apiCacheService;
 
-    public function __construct(?CacheRepository $cache = null)
+    public function __construct(?CacheRepository $cache = null, ?ApiCacheService $apiCacheService = null)
     {
         $this->baseUrl = config('services.safe_browsing.base_url');
         $this->apiKey = config('services.safe_browsing.api_key');
         $this->timeout = (int) config('services.safe_browsing.timeout', 15);
         $this->cacheTtl = (int) config('services.safe_browsing.cache_ttl', 604800);
         $this->cache = $cache ?? Cache::store(config('cache.default'));
+        $this->apiCacheService = $apiCacheService ?? app(ApiCacheService::class);
     }
 
     public function enabled(): bool
@@ -36,42 +39,56 @@ class SafeBrowsingService
             return [];
         }
 
-        $cacheKey = sprintf('safe_browsing:%s', md5($url));
+        $redisCacheKey = sprintf('safe_browsing:%s', md5($url));
+        $cached = $this->cache->get($redisCacheKey);
+        if ($cached !== null) {
+            return $cached;
+        }
 
-        return $this->cache->remember($cacheKey, $this->cacheTtl, function () use ($url) {
-            $payload = $this->buildPayload($url);
+        try {
+            $result = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'safe_browsing',
+                feature: 'check_url',
+                queryParams: ['url' => $url],
+                apiFetcher: function () use ($url) {
+                    $payload = $this->buildPayload($url);
 
-            try {
-                $response = Http::timeout($this->timeout)
-                    ->acceptJson()
-                    ->withHeaders([
-                        'Content-Type' => 'application/json',
-                        'User-Agent' => 'Luminiaeo-Backend/1.0.0',
-                    ])
-                    ->retry(2, 200)
-                    ->post($this->baseUrl . '?key=' . urlencode($this->apiKey), $payload)
-                    ->throw()
-                    ->json();
+                    return Http::timeout($this->timeout)
+                        ->acceptJson()
+                        ->withHeaders([
+                            'Content-Type' => 'application/json',
+                            'User-Agent' => 'Luminiaeo-Backend/1.0.0',
+                        ])
+                        ->retry(2, 200)
+                        ->post($this->baseUrl . '?key=' . urlencode($this->apiKey), $payload)
+                        ->throw()
+                        ->json();
+                },
+            );
 
-                return $response;
-            } catch (RequestException $e) {
-                $errorResponse = $e->response?->json();
-                $statusCode = $e->response?->status();
+            $payload = $result->payload();
+            $this->cache->put($redisCacheKey, $payload, $this->cacheTtl);
 
-                if ($statusCode === 403) {
-                    $errorReason = $errorResponse['error']['details'][0]['reason'] ?? null;
-                    if ($errorReason === 'API_KEY_HTTP_REFERRER_BLOCKED') {
-                        Log::error('Safe Browsing API key has HTTP referrer restrictions', ['url' => $url]);
-                    } else {
-                        Log::error('Safe Browsing API access denied', ['url' => $url, 'status_code' => $statusCode]);
-                    }
+            return $payload;
+        } catch (RequestException $e) {
+            $statusCode = $e->response?->status();
+
+            if ($statusCode === 403) {
+                $errorReason = $e->response?->json()['error']['details'][0]['reason'] ?? null;
+                if ($errorReason === 'API_KEY_HTTP_REFERRER_BLOCKED') {
+                    Log::error('Safe Browsing API key has HTTP referrer restrictions', ['url' => $url]);
                 } else {
-                    Log::error('Safe Browsing lookup failed', ['url' => $url, 'error' => $e->getMessage()]);
+                    Log::error('Safe Browsing API access denied', ['url' => $url, 'status_code' => $statusCode]);
                 }
-
-                return [];
+            } else {
+                Log::error('Safe Browsing lookup failed', ['url' => $url, 'error' => $e->getMessage()]);
             }
-        });
+
+            return [];
+        } catch (\Exception $e) {
+            Log::error('Safe Browsing lookup failed', ['url' => $url, 'error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     protected function buildPayload(string $url): array

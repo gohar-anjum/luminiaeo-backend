@@ -2,6 +2,7 @@
 
 namespace App\Services\Whois;
 
+use App\Services\ApiCache\ApiCacheService;
 use Carbon\Carbon;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Http\Client\RequestException;
@@ -18,14 +19,16 @@ class WhoisLookupService
     protected int $timeout;
     protected int $cacheTtl;
     protected CacheRepository $cache;
+    protected ApiCacheService $apiCacheService;
 
-    public function __construct(?CacheRepository $cache = null)
+    public function __construct(?CacheRepository $cache = null, ?ApiCacheService $apiCacheService = null)
     {
         $this->baseUrl = rtrim(config('services.whoisxml.base_url', ''), '/');
         $this->apiKey = config('services.whoisxml.api_key');
         $this->timeout = (int) config('services.whoisxml.timeout', 20);
         $this->cacheTtl = (int) config('services.whoisxml.cache_ttl', 604800);
         $this->cache = $cache ?? Cache::store(config('cache.default'));
+        $this->apiCacheService = $apiCacheService ?? app(ApiCacheService::class);
     }
 
     public function enabled(): bool
@@ -40,11 +43,19 @@ class WhoisLookupService
         }
 
         $domain = $this->sanitizeDomain($domain);
-        $cacheKey = sprintf('whois:%s', md5($domain));
 
-        return $this->cache->remember($cacheKey, $this->cacheTtl, function () use ($domain) {
-            try {
-                return Http::timeout($this->timeout)
+        $redisCacheKey = sprintf('whois:%s', md5($domain));
+        $cached = $this->cache->get($redisCacheKey);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        try {
+            $result = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'whoisxml',
+                feature: 'lookup',
+                queryParams: ['domain' => $domain],
+                apiFetcher: fn () => Http::timeout($this->timeout)
                     ->acceptJson()
                     ->retry(2, 200)
                     ->get($this->baseUrl, [
@@ -53,12 +64,17 @@ class WhoisLookupService
                         'outputFormat' => 'JSON',
                     ])
                     ->throw()
-                    ->json();
-            } catch (RequestException $e) {
-                Log::error('WHOIS lookup failed', ['domain' => $domain, 'error' => $e->getMessage()]);
-                return [];
-            }
-        });
+                    ->json(),
+            );
+
+            $payload = $result->payload();
+            $this->cache->put($redisCacheKey, $payload, $this->cacheTtl);
+
+            return $payload;
+        } catch (\Exception $e) {
+            Log::error('WHOIS lookup failed', ['domain' => $domain, 'error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     public function extractSignals(array $raw): array

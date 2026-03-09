@@ -36,4 +36,21 @@ class User extends Authenticatable
     {
         return $this->hasMany(\App\Domain\Billing\Models\CreditTransaction::class);
     }
+
+    public function apiResults(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(ApiResult::class, 'user_api_results', 'user_id', 'api_result_id')
+            ->withPivot(['feature_key', 'was_cache_hit', 'credit_charged', 'credit_transaction_id', 'accessed_at'])
+            ->withTimestamps();
+    }
+
+    public function userApiResults(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(UserApiResult::class);
+    }
+
+    public function apiRequestLogs(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ApiRequestLog::class);
+    }
 }

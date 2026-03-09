@@ -3,6 +3,7 @@
 namespace App\Services\FAQ;
 
 use App\Interfaces\KeywordCacheRepositoryInterface;
+use App\Services\ApiCache\ApiCacheService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
@@ -14,14 +15,16 @@ class AlsoAskedService
     protected int $timeout;
     protected int $cacheTTL;
     protected KeywordCacheRepositoryInterface $cacheRepository;
+    protected ApiCacheService $apiCacheService;
 
-    public function __construct(KeywordCacheRepositoryInterface $cacheRepository)
+    public function __construct(KeywordCacheRepositoryInterface $cacheRepository, ?ApiCacheService $apiCacheService = null)
     {
         $this->baseUrl = config('services.alsoasked.base_url', 'https://alsoaskedapi.com/v1');
         $this->apiKey = config('services.alsoasked.api_key');
         $this->timeout = config('services.alsoasked.timeout', 30);
         $this->cacheTTL = config('services.alsoasked.cache_ttl', 86400);
         $this->cacheRepository = $cacheRepository;
+        $this->apiCacheService = $apiCacheService ?? app(ApiCacheService::class);
     }
 
     public function isAvailable(): bool
@@ -42,22 +45,31 @@ class AlsoAskedService
         }
 
         $searchTerm = $termsArray[0];
-        $cacheKey = $this->getCacheKey($searchTerm, $language, $region, $depth);
+        $redisCacheKey = $this->getCacheKey($searchTerm, $language, $region, $depth);
 
-        if (!$fresh && Cache::has($cacheKey)) {
-            return Cache::get($cacheKey);
+        if (!$fresh && Cache::has($redisCacheKey)) {
+            return Cache::get($redisCacheKey);
         }
 
         try {
-            $questions = $this->fetchQuestions($termsArray, $language, $region, $depth);
+            $cacheResult = $this->apiCacheService->resolveAnonymous(
+                apiProvider: 'alsoasked',
+                feature: 'search',
+                queryParams: ['terms' => $termsArray, 'language' => $language, 'region' => $region, 'depth' => $depth],
+                apiFetcher: fn () => $this->fetchQuestions($termsArray, $language, $region, $depth),
+            );
+
+            $questions = $cacheResult->payload();
 
             if (!empty($questions)) {
-                Cache::put($cacheKey, $questions, now()->addSeconds($this->cacheTTL));
+                Cache::put($redisCacheKey, $questions, now()->addSeconds($this->cacheTTL));
             }
 
-            $keywords = $this->extractKeywordsFromQuestions($questions);
-            if (!empty($keywords)) {
-                $this->cacheKeywordsInDatabase($keywords, $language, $region);
+            if (!$cacheResult->wasCacheHit) {
+                $keywords = $this->extractKeywordsFromQuestions($questions);
+                if (!empty($keywords)) {
+                    $this->cacheKeywordsInDatabase($keywords, $language, $region);
+                }
             }
 
             return $questions;
