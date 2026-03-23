@@ -12,10 +12,13 @@ from collections import Counter
 import re
 from difflib import SequenceMatcher
 
+from app.keyword_tree import load_tree_embedding_model, router as keyword_tree_router
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Keyword Clustering Service", version="1.0.0")
+app.include_router(keyword_tree_router)
 
 model = None
 redis_client = None
@@ -61,10 +64,13 @@ class ClusterResponse(BaseModel):
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker health checks."""
+    from app.keyword_tree import tree_embedding_model as _tree_m
+
     return {
         "status": "ok",
         "service": "keyword-clustering",
         "model_loaded": model is not None,
+        "tree_model_loaded": _tree_m is not None,
         "redis_available": redis_client is not None
     }
 
@@ -85,6 +91,12 @@ async def load_model():
             logger.info(f"Base model {model_name} loaded successfully")
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
+        raise
+
+    try:
+        load_tree_embedding_model()
+    except Exception as e:
+        logger.error(f"Failed to load tree embedding model: {e}")
         raise
 
 def generate_embeddings(keywords: List[str]) -> np.ndarray:
