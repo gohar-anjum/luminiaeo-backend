@@ -2,11 +2,11 @@
 
 namespace App\Services\LLM;
 
+use App\Services\LLM\Failures\ProviderCircuitBreaker;
 use App\Services\LLM\Prompt\PlaceholderReplacer;
 use App\Services\LLM\Prompt\PromptLoader;
 use App\Services\LLM\Support\JsonExtractor;
 use App\Services\LLM\Transformers\KeywordIntentParser;
-use App\Services\LLM\Failures\ProviderCircuitBreaker;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -19,8 +19,7 @@ class LLMClient
         protected PlaceholderReplacer $replacer,
         protected ProviderCircuitBreaker $breaker,
         protected KeywordIntentParser $keywordParser,
-    ) {
-    }
+    ) {}
 
     public function analyzeKeywordIntent(string $keyword): array
     {
@@ -36,7 +35,7 @@ class LLMClient
         ];
 
         foreach ($this->preferredProviders() as $provider) {
-            if (!$this->canUseProvider($provider)) {
+            if (! $this->canUseProvider($provider)) {
                 continue;
             }
 
@@ -89,7 +88,7 @@ class LLMClient
 
             $response = $this->generateWithAnyProvider($messages);
 
-            if (!$response) {
+            if (! $response) {
                 break;
             }
 
@@ -115,8 +114,9 @@ class LLMClient
             return [];
         }
 
-        if (!$this->canUseProvider($provider)) {
+        if (! $this->canUseProvider($provider)) {
             Log::warning('Provider unavailable for batch validation', ['provider' => $provider]);
+
             return [];
         }
 
@@ -147,27 +147,22 @@ class LLMClient
 
             $messages = [
                 ['role' => 'system', 'content' => $system],
-                ['role' => 'user', 'content' => trim($userPrompt . "\n\n" . json_encode($payload, JSON_PRETTY_PRINT))],
+                ['role' => 'user', 'content' => trim($userPrompt."\n\n".json_encode($payload, JSON_PRETTY_PRINT))],
             ];
 
             try {
                 $raw = $this->sendWithProvider($provider, $messages, ['temperature' => 0.1]);
                 $text = $this->extractTextFromRaw($raw, $provider);
-                
-                // Log the complete raw response from LLM
-                Log::info('Citation batch validation - Complete LLM Response', [
+
+                Log::debug('Citation batch validation - LLM response', [
                     'provider' => $provider,
                     'target_url' => $targetUrl,
-                    'target_domain' => $targetDomain,
                     'chunk_size' => count($chunk),
-                    'queries' => $chunk,
                     'response_length' => strlen($text),
-                    'raw_response_text' => $text,
-                    'raw_response_json' => $raw,
                 ]);
-                
+
                 $parsed = $this->parseCitationBatchResponse($text, $chunk, $targetDomain, $alias);
-                
+
                 // Log parsed results with URL information
                 $totalUrls = 0;
                 $queriesWithUrls = 0;
@@ -175,7 +170,7 @@ class LLMClient
                 foreach ($parsed as $index => $result) {
                     $urlCount = count($result['citation_references'] ?? []);
                     $hasCitation = $result['citation_found'] ?? false;
-                    
+
                     if ($urlCount > 0) {
                         $totalUrls += $urlCount;
                         $queriesWithUrls++;
@@ -183,21 +178,18 @@ class LLMClient
                     if ($hasCitation) {
                         $queriesWithCitations++;
                     }
-                    
-                    Log::info('Citation batch validation - Parsed Result', [
+
+                    Log::debug('Citation batch validation - Parsed Result', [
                         'provider' => $provider,
                         'query_index' => $index,
                         'query' => $chunk[$index] ?? 'unknown',
                         'citation_found' => $hasCitation,
                         'confidence' => $result['confidence'] ?? 0,
                         'urls_received' => $urlCount,
-                        'urls' => $result['citation_references'] ?? [],
-                        'has_urls' => $urlCount > 0,
-                        'full_result' => $result,
                     ]);
                 }
-                
-                Log::info('Citation batch validation - Summary', [
+
+                Log::debug('Citation batch validation - Summary', [
                     'provider' => $provider,
                     'target_url' => $targetUrl,
                     'chunk_size' => count($chunk),
@@ -207,7 +199,7 @@ class LLMClient
                     'total_urls_received' => $totalUrls,
                     'avg_urls_per_query' => count($chunk) > 0 ? round($totalUrls / count($chunk), 2) : 0,
                 ]);
-                
+
                 $results = array_replace($results, $parsed);
                 $this->breaker->clearFailures($provider);
             } catch (\Throwable $e) {
@@ -231,12 +223,14 @@ class LLMClient
     public function checkCitationOpenAi(string $query, string $targetUrl): array
     {
         $results = $this->batchValidateCitations([$query], $targetUrl, 'openai');
+
         return $results[0] ?? $this->defaultCitationResult('gpt', $query, 'No response');
     }
 
     public function checkCitationGemini(string $query, string $targetUrl): array
     {
         $results = $this->batchValidateCitations([$query], $targetUrl, 'gemini');
+
         return $results[0] ?? $this->defaultCitationResult('gemini', $query, 'No response');
     }
 
@@ -252,8 +246,8 @@ class LLMClient
         }
 
         return match ($provider) {
-            'openai' => !empty(config('citations.openai.api_key')),
-            'gemini' => !empty(config('citations.gemini.api')),
+            'openai' => ! empty(config('citations.openai.api_key')),
+            'gemini' => ! empty(config('citations.gemini.api')),
             default => false,
         };
     }
@@ -281,10 +275,10 @@ class LLMClient
         $response = Http::withToken($config['api_key'] ?? '')
             ->timeout($config['timeout'] ?? 60)
             ->retry($config['max_retries'] ?? 3, ($config['backoff_seconds'] ?? 2) * 1000)
-            ->post(rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions', $payload);
+            ->post(rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/').'/chat/completions', $payload);
 
         if ($response->failed()) {
-            throw new \RuntimeException('OpenAI API error: ' . $response->body());
+            throw new \RuntimeException('OpenAI API error: '.$response->body());
         }
 
         return $response->json();
@@ -319,7 +313,7 @@ class LLMClient
             ->post($endpoint, $payload);
 
         if ($response->failed()) {
-            throw new \RuntimeException('Gemini API error: ' . $response->body());
+            throw new \RuntimeException('Gemini API error: '.$response->body());
         }
 
         return $response->json();
@@ -328,7 +322,7 @@ class LLMClient
     protected function flattenMessagesForGemini(array $messages): string
     {
         return collect($messages)
-            ->map(fn ($message) => strtoupper($message['role']) . ': ' . trim($message['content']))
+            ->map(fn ($message) => strtoupper($message['role']).': '.trim($message['content']))
             ->implode("\n\n");
     }
 
@@ -383,6 +377,7 @@ class LLMClient
                     'provider' => $providerAlias,
                     'entry' => $entry,
                 ]);
+
                 continue;
             }
 
@@ -431,7 +426,7 @@ class LLMClient
         }
 
         foreach ($chunk as $index => $query) {
-            if (!isset($mapped[$index])) {
+            if (! isset($mapped[$index])) {
                 Log::warning('Citation batch entry missing for query', [
                     'provider' => $providerAlias,
                     'query_index' => $index,
@@ -446,7 +441,7 @@ class LLMClient
 
     protected function matchQueryIndex(?string $query, array $chunk): ?int
     {
-        if (!$query) {
+        if (! $query) {
             return null;
         }
 
@@ -465,7 +460,7 @@ class LLMClient
 
         foreach ($competitors as $competitor) {
             $domain = $this->normalizeDomain($competitor['domain'] ?? ($competitor['url'] ?? null));
-            if (!$domain) {
+            if (! $domain) {
                 continue;
             }
 
@@ -513,13 +508,14 @@ class LLMClient
         }
 
         $lines = array_map('trim', preg_split('/\r\n|\r|\n/', $text));
+
         return array_values(array_filter($lines, fn ($line) => strlen($line) > 2));
     }
 
     protected function generateWithAnyProvider(array $messages): ?array
     {
         foreach ($this->preferredProviders() as $provider) {
-            if (!$this->canUseProvider($provider)) {
+            if (! $this->canUseProvider($provider)) {
                 continue;
             }
 
@@ -598,7 +594,7 @@ class LLMClient
 
     protected function normalizeDomain(?string $value): ?string
     {
-        if (!$value) {
+        if (! $value) {
             return null;
         }
 
@@ -611,7 +607,7 @@ class LLMClient
 
     protected function rootDomain(?string $domain): ?string
     {
-        if (!$domain) {
+        if (! $domain) {
             return null;
         }
 
@@ -625,7 +621,7 @@ class LLMClient
 
     protected function isTargetDomain(?string $domain, ?string $targetDomain): bool
     {
-        if (!$domain || !$targetDomain) {
+        if (! $domain || ! $targetDomain) {
             return false;
         }
 

@@ -9,7 +9,7 @@ use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable ,HasApiTokens;
+    use HasApiTokens, HasFactory ,Notifiable;
 
     protected $fillable = [
         'name',
@@ -29,6 +29,8 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'credits_balance' => 'integer',
+            'is_admin' => 'boolean',
+            'suspended_at' => 'datetime',
         ];
     }
 

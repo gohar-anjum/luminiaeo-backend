@@ -33,9 +33,9 @@ return [
 
     'dataforseo' => [
         'base_url' => env('DATAFORSEO_BASE_URL', 'https://api.dataforseo.com/v3'),
-        'login'    => env('DATAFORSEO_LOGIN'),
+        'login' => env('DATAFORSEO_LOGIN'),
         'password' => env('DATAFORSEO_PASSWORD'),
-        'timeout'  => env('DATAFORSEO_TIMEOUT', 60),
+        'timeout' => env('DATAFORSEO_TIMEOUT', 60),
         'cache_ttl' => env('DATAFORSEO_CACHE_TTL', 86400),
         'max_concurrent_requests' => env('DATAFORSEO_MAX_CONCURRENT_REQUESTS', 5),
         // Search Volume API limits
@@ -97,6 +97,8 @@ return [
     'keyword_clustering' => [
         'url' => env('KEYWORD_CLUSTERING_SERVICE_URL'),
         'timeout' => env('KEYWORD_CLUSTERING_TIMEOUT', 120),
+        'snapshot_ttl_days' => (int) env('KEYWORD_CLUSTER_SNAPSHOT_TTL_DAYS', 7),
+        'tree_schema_version' => (int) env('KEYWORD_CLUSTER_TREE_SCHEMA_VERSION', 1),
     ],
 
     'keyword_intent' => [

@@ -2,14 +2,14 @@
 
 namespace App\Traits;
 
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Support\Facades\Auth;
 
 trait ValidatesResourceOwnership
 {
     protected function validateTaskOwnership($task, ?string $userIdField = 'user_id'): void
     {
-        if (!$task) {
+        if (! $task) {
             return;
         }
 
@@ -23,7 +23,7 @@ trait ValidatesResourceOwnership
 
     protected function validateProjectOwnership(?int $projectId): void
     {
-        if (!$projectId) {
+        if (! $projectId) {
             return;
         }
 
@@ -31,16 +31,23 @@ trait ValidatesResourceOwnership
             ->where('user_id', Auth::id())
             ->first();
 
-        if (!$project) {
+        if (! $project) {
             throw new AuthorizationException('Project not found or you do not have access to it');
         }
     }
 
     protected function validateSeoTaskOwnership(\App\Models\SeoTask $task): void
     {
+        if ($task->user_id !== null) {
+            if ((int) $task->user_id !== (int) Auth::id()) {
+                throw new AuthorizationException('Unauthorized access to this task');
+            }
+
+            return;
+        }
+
         if ($task->project && $task->project->user_id !== Auth::id()) {
             throw new AuthorizationException('Unauthorized access to this task');
         }
     }
 }
-

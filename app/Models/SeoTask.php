@@ -4,13 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SeoTask extends Model
 {
     use HasFactory;
+
     protected $fillable = [
+        'user_id',
         'task_id',
         'type',
         'domain',
@@ -34,12 +36,17 @@ class SeoTask extends Model
     ];
 
     public const STATUS_PENDING = 'pending';
+
     public const STATUS_PROCESSING = 'processing';
+
     public const STATUS_COMPLETED = 'completed';
+
     public const STATUS_FAILED = 'failed';
 
     public const TYPE_BACKLINKS = 'backlinks';
+
     public const TYPE_SEARCH_VOLUME = 'search_volume';
+
     public const TYPE_KEYWORDS = 'keywords';
 
     public function backlinks(): HasMany
@@ -52,6 +59,11 @@ class SeoTask extends Model
         return $this->belongsTo(Project::class, 'domain', 'domain');
     }
 
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
     public function markAsProcessing(): void
     {
         $this->update([
@@ -60,7 +72,7 @@ class SeoTask extends Model
         ]);
     }
 
-    public function markAsCompleted(array $result = null): void
+    public function markAsCompleted(?array $result = null): void
     {
         $this->update([
             'status' => self::STATUS_COMPLETED,

@@ -615,6 +615,22 @@ docker-compose exec app php artisan migrate:status
 
 ---
 
+## Admin panel API
+
+Admin routes live under **`/api/admin`**, require **`Authorization: Bearer {token}`** (Sanctum), and **`users.is_admin = true`**. Regular authenticated routes also use middleware that blocks accounts with **`suspended_at`** set (admins are exempt so operations can continue).
+
+- **Dashboard:** `GET /api/admin/dashboard/stats`, `GET /api/admin/dashboard/charts` — values are cached (keys `admin_stats_cache` / `admin_charts_cache` via `config/admin.php`); a scheduler entry refreshes them every five minutes (`RefreshAdminDashboardCacheJob`).
+- **Users:** list/show, `POST .../suspend`, `POST .../unsuspend`, `POST .../adjust-credits` with JSON `{ "amount": <signed integer> }`.
+- **Backlinks:** list/show/delete, `POST .../verify` (Safe Browsing re-check). New columns: `verification_status`, `verified_at`; `target_url` in JSON is derived as `https://{domain}`. Submitter is linked via `seo_tasks.user_id` (set on new backlink jobs).
+- **Credit transactions & API logs:** paginated `data` + `meta`, plus `GET .../export` streaming CSV (`chunkById`). Logs are **`api_request_logs`** (upstream/provider calls recorded by `App\Services\ApiCache\ApiCacheService`; admin JSON uses synthetic `endpoint` `/api/upstream/{provider}/{feature}` and `method` `POST`).
+- **Clusters:** snapshots from `keyword_cluster_snapshots`; `GET .../clusters/{id}/snapshots` returns rows with `cluster_id` = the anchor snapshot id from the URL.
+- **Subscriptions:** Cashier `subscriptions` table when present; `current_period_end` maps from `ends_at` when stored locally.
+- **System:** `POST /api/admin/cache/clear`, `GET /api/admin/system/health`, `POST /api/admin/announcements` (`title`, `body`).
+
+Promote an operator in the database: `UPDATE users SET is_admin = 1 WHERE id = ?;`
+
+---
+
 ## 🎯 System Status
 
 ✅ **Production Ready** - All critical improvements implemented:

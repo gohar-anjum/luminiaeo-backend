@@ -7,10 +7,10 @@ class BacklinkDTO
     public function __construct(
         public string $domain,
         public string $sourceUrl,
-        public ?string $anchor = null,
-        public ?string $linkType = null,
-        public ?string $sourceDomain = null,
-        public ?float $domainRank = null,
+        public ?string $anchor,
+        public ?string $linkType,
+        public ?string $sourceDomain,
+        public ?float $domainRank,
         public string $taskId,
         public ?string $ip = null,
         public ?string $asn = null,
@@ -46,7 +46,7 @@ class BacklinkDTO
             ?? null;
 
         $linkType = $data['link_type'] ?? null;
-        if (!$linkType && array_key_exists('dofollow', $data)) {
+        if (! $linkType && array_key_exists('dofollow', $data)) {
             $linkType = $data['dofollow'] ? 'dofollow' : 'nofollow';
         }
 
@@ -57,9 +57,9 @@ class BacklinkDTO
 
         $raw = $data;
         $spamScore = isset($data['backlink_spam_score']) && is_numeric($data['backlink_spam_score'])
-            ? (int)$data['backlink_spam_score']
+            ? (int) $data['backlink_spam_score']
             : (isset($data['url_to_spam_score']) && is_numeric($data['url_to_spam_score'])
-                ? (int)$data['url_to_spam_score']
+                ? (int) $data['url_to_spam_score']
                 : null);
 
         return new self(
@@ -70,7 +70,7 @@ class BacklinkDTO
             sourceDomain: $sourceDomain,
             domainRank: $domainRank,
             taskId: $taskId,
-            ip: isset($data['domain_from_ip']) && !is_array($data['domain_from_ip']) ? (string)$data['domain_from_ip'] : null,
+            ip: isset($data['domain_from_ip']) && ! is_array($data['domain_from_ip']) ? (string) $data['domain_from_ip'] : null,
             raw: $raw,
             firstSeen: $data['first_seen'] ?? null,
             lastSeen: $data['last_seen'] ?? null,
@@ -87,8 +87,8 @@ class BacklinkDTO
         }
 
         $registrar = $signals['registrar'] ?? null;
-        if ($registrar && !is_array($registrar)) {
-            $registrar = (string)$registrar;
+        if ($registrar && ! is_array($registrar)) {
+            $registrar = (string) $registrar;
             if (mb_strlen($registrar) > 255) {
                 $registrar = mb_substr($registrar, 0, 255);
             }
@@ -96,14 +96,14 @@ class BacklinkDTO
         }
 
         $domainAge = $signals['domain_age_days'] ?? null;
-        $this->domainAgeDays = is_array($domainAge) ? null : ($domainAge ? (int)$domainAge : $this->domainAgeDays);
+        $this->domainAgeDays = is_array($domainAge) ? null : ($domainAge ? (int) $domainAge : $this->domainAgeDays);
     }
 
     public function applyDetection(array $result): void
     {
         // Always update pbn_probability if it exists in the result, even if it's 0
         if (isset($result['pbn_probability']) && is_numeric($result['pbn_probability'])) {
-            $this->pbnProbability = (float)$result['pbn_probability'];
+            $this->pbnProbability = (float) $result['pbn_probability'];
         }
 
         $this->riskLevel = isset($result['risk_level']) && is_string($result['risk_level'])
@@ -120,13 +120,13 @@ class BacklinkDTO
 
         $signals = $result['signals'] ?? [];
 
-        if (isset($signals['asn']) && !is_array($signals['asn'])) {
-            $this->asn = is_string($signals['asn']) || is_numeric($signals['asn']) ? (string)$signals['asn'] : $this->asn;
+        if (isset($signals['asn']) && ! is_array($signals['asn'])) {
+            $this->asn = is_string($signals['asn']) || is_numeric($signals['asn']) ? (string) $signals['asn'] : $this->asn;
         }
-        if (isset($signals['hosting_provider']) && !is_array($signals['hosting_provider'])) {
+        if (isset($signals['hosting_provider']) && ! is_array($signals['hosting_provider'])) {
             $this->hostingProvider = is_string($signals['hosting_provider']) ? $signals['hosting_provider'] : $this->hostingProvider;
         }
-        if (isset($signals['content_fingerprint']) && !is_array($signals['content_fingerprint'])) {
+        if (isset($signals['content_fingerprint']) && ! is_array($signals['content_fingerprint'])) {
             $this->contentFingerprint = is_string($signals['content_fingerprint']) ? $signals['content_fingerprint'] : $this->contentFingerprint;
         }
     }
@@ -134,13 +134,13 @@ class BacklinkDTO
     public function applySafeBrowsing(array $data): void
     {
         $status = $data['status'] ?? null;
-        $this->safeBrowsingStatus = is_array($status) ? 'unknown' : ($status ? (string)$status : ($this->safeBrowsingStatus ?? 'unknown'));
+        $this->safeBrowsingStatus = is_array($status) ? 'unknown' : ($status ? (string) $status : ($this->safeBrowsingStatus ?? 'unknown'));
 
         $threats = $data['threats'] ?? null;
         $this->safeBrowsingThreats = is_array($threats) ? $threats : null;
 
         $checkedAt = $data['checked_at'] ?? null;
-        $this->safeBrowsingCheckedAt = is_array($checkedAt) ? null : ($checkedAt ? (string)$checkedAt : $this->safeBrowsingCheckedAt);
+        $this->safeBrowsingCheckedAt = is_array($checkedAt) ? null : ($checkedAt ? (string) $checkedAt : $this->safeBrowsingCheckedAt);
     }
 
     public function toArray(): array
@@ -172,22 +172,40 @@ class BacklinkDTO
 
     public function toDatabaseArray(): array
     {
-        $parseDate = fn($date) => is_string($date) && !empty($date)
-            ? (function() use ($date) { try { return \Carbon\Carbon::parse($date); } catch (\Exception $e) { return null; } })()
+        $parseDate = fn ($date) => is_string($date) && ! empty($date)
+            ? (function () use ($date) {
+                try {
+                    return \Carbon\Carbon::parse($date);
+                } catch (\Exception $e) {
+                    return null;
+                }
+            })()
             : ($date instanceof \DateTimeInterface ? $date : null);
 
-        $safeString = fn($val, $maxLength = null) => is_array($val) ? null : ($val !== null ? ($maxLength ? mb_substr((string)$val, 0, $maxLength) : (string)$val) : null);
+        $safeString = fn ($val, $maxLength = null) => is_array($val) ? null : ($val !== null ? ($maxLength ? mb_substr((string) $val, 0, $maxLength) : (string) $val) : null);
 
         $safeBrowsingCheckedAt = $parseDate($this->safeBrowsingCheckedAt);
 
+        $verificationStatus = 'pending';
+        $verifiedAt = null;
+        if ($safeBrowsingCheckedAt && $this->safeBrowsingStatus) {
+            if ($this->safeBrowsingStatus === 'clean') {
+                $verificationStatus = 'verified';
+                $verifiedAt = $safeBrowsingCheckedAt;
+            } elseif ($this->safeBrowsingStatus === 'flagged') {
+                $verificationStatus = 'failed';
+                $verifiedAt = $safeBrowsingCheckedAt;
+            }
+        }
+
         return [
-            'domain' => (string)$this->domain,
-            'source_url' => (string)$this->sourceUrl,
-            'anchor' => $this->anchor ? (string)$this->anchor : null,
-            'link_type' => $this->linkType ? (string)$this->linkType : null,
-            'source_domain' => $this->sourceDomain ? (string)$this->sourceDomain : null,
+            'domain' => (string) $this->domain,
+            'source_url' => (string) $this->sourceUrl,
+            'anchor' => $this->anchor ? (string) $this->anchor : null,
+            'link_type' => $this->linkType ? (string) $this->linkType : null,
+            'source_domain' => $this->sourceDomain ? (string) $this->sourceDomain : null,
             'domain_rank' => $this->domainRank,
-            'task_id' => (string)$this->taskId,
+            'task_id' => (string) $this->taskId,
             'updated_at' => now(),
             'ip' => $safeString($this->ip),
             'asn' => $safeString($this->asn),
@@ -196,13 +214,15 @@ class BacklinkDTO
             'domain_age_days' => $this->domainAgeDays,
             'content_fingerprint' => $safeString($this->contentFingerprint, 191),
             'pbn_probability' => $this->pbnProbability,
-            'risk_level' => $this->riskLevel ? (string)$this->riskLevel : 'unknown',
+            'risk_level' => $this->riskLevel ? (string) $this->riskLevel : 'unknown',
             'pbn_reasons' => is_array($this->pbnReasons) ? $this->pbnReasons : null,
             'pbn_signals' => is_array($this->pbnSignals) ? $this->pbnSignals : null,
-            'safe_browsing_status' => $this->safeBrowsingStatus ? (string)$this->safeBrowsingStatus : 'unknown',
+            'safe_browsing_status' => $this->safeBrowsingStatus ? (string) $this->safeBrowsingStatus : 'unknown',
             'safe_browsing_threats' => is_array($this->safeBrowsingThreats) ? $this->safeBrowsingThreats : null,
             'safe_browsing_checked_at' => $safeBrowsingCheckedAt,
             'backlink_spam_score' => $this->backlinkSpamScore,
+            'verification_status' => $verificationStatus,
+            'verified_at' => $verifiedAt,
         ];
     }
 }

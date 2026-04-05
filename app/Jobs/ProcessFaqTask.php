@@ -12,6 +12,11 @@ class ProcessFaqTask implements ShouldQueue
 {
     use Queueable;
 
+    /**
+     * When AlsoAsked HTTP returns empty, retry before giving up (5s × 48 ≈ 4 minutes).
+     */
+    private const ALSOASKED_NULL_RETRY_MAX = 48;
+
     protected int $taskId;
 
     public function __construct(int $taskId)
@@ -22,8 +27,8 @@ class ProcessFaqTask implements ShouldQueue
     public function handle(AlsoAskedService $alsoAskedService, FaqGeneratorService $faqGeneratorService): void
     {
         $task = FaqTask::find($this->taskId);
-        
-        if (!$task || $task->isCompleted()) {
+
+        if (! $task || $task->isCompleted()) {
             return;
         }
 
@@ -48,122 +53,154 @@ class ProcessFaqTask implements ShouldQueue
             $keyword = $task->search_keyword ?? $task->topic ?? '';
 
             // PHASE 1: Process SERP questions immediately if not already processed
-            if (!empty($task->serp_questions) && empty($task->serp_answers)) {
+            if (! empty($task->serp_questions) && empty($task->serp_answers)) {
                 $this->processSerpQuestions($task, $faqGeneratorService, $keyword);
                 // Refresh task to get updated serp_answers
                 $task->refresh();
             }
 
-            // PHASE 2: Check for PAA (AlsoAsked) questions
-            $paaQuestions = null;
-            
-            if (!empty($task->alsoasked_questions) && is_array($task->alsoasked_questions)) {
-                // Use existing AlsoAsked questions from task
-                $paaQuestions = $task->alsoasked_questions;
-                
-                // Strictly limit PAA questions so total (SERP + PAA) = 10 max
-                $serpCount = count($task->serp_questions ?? []);
-                $maxPaaQuestions = max(0, 10 - $serpCount);
-                
-                if ($maxPaaQuestions === 0) {
-                    $paaQuestions = [];
-                    $task->update(['alsoasked_questions' => []]);
-                } elseif (count($paaQuestions) > $maxPaaQuestions) {
-                    $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
-                    $task->update(['alsoasked_questions' => $paaQuestions]);
+            // PHASE 2: Resolve AlsoAsked into alsoasked_questions (null in DB = poll not finished yet)
+            $task->refresh();
+            if (! $this->isAlsoAskedPhaseResolved($task)) {
+                if (! $this->pollAlsoAskedAndPersist($task, $alsoAskedService)) {
+                    return;
                 }
-            } else {
-                if (!empty($task->alsoasked_search_id) && is_string($task->alsoasked_search_id)) {
-                    $searchResults = $alsoAskedService->getSearchResults($task->alsoasked_search_id);
-
-                    if (!$searchResults) {
-                        $task->refresh();
-                        if (!empty($task->serp_answers)) {
-                            $this->finalizeTask($task, $faqGeneratorService, true);
-                            return;
-                        }
-                        throw new \RuntimeException('Failed to get AlsoAsked search results');
-                    }
-
-                    $status = $searchResults['status'] ?? 'unknown';
-
-                    if ($status === 'running') {
-                        // Refresh task to check if SERP answers are ready
-                        $task->refresh();
-                        
-                        // If SERP answers are ready, don't finalize yet - just make them available
-                        // Continue waiting for PAA, then finalize with both
-                        if (!empty($task->serp_answers)) {
-                            // SERP answers are ready and available via status endpoint
-                            // Continue waiting for PAA, then finalize with both
-                            dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
-                            return;
-                        }
-                        
-                        // No SERP answers yet, continue waiting for both
-                        dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
-                        return;
-                    }
-
-                    if ($status === 'success' || $status === 'no_records') {
-                        if ($status === 'success') {
-                            $paaQuestions = $alsoAskedService->extractQuestions($searchResults);
-                            
-                            $serpCount = count($task->serp_questions ?? []);
-                            $maxPaaQuestions = max(0, 10 - $serpCount);
-                            
-                            if ($maxPaaQuestions === 0) {
-                                $paaQuestions = [];
-                            } elseif (count($paaQuestions) > $maxPaaQuestions) {
-                                $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
-                            }
-                        }
-                        $task->update(['alsoasked_questions' => $paaQuestions ?? []]);
-                    } else {
-                        // Refresh task to check if SERP answers are ready
-                        $task->refresh();
-                        
-                        // If SERP answers are ready, finalize with SERP only
-                        if (!empty($task->serp_answers)) {
-                            $this->finalizeTask($task, $faqGeneratorService, true);
-                            return;
-                        }
-                        dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
-                        return;
-                    }
-                }
-            }
-
-            // PHASE 2: Process PAA questions if available and not already processed
-            if (!empty($paaQuestions) && empty($task->paa_answers)) {
-                $this->processPaaQuestions($task, $faqGeneratorService, $keyword, $paaQuestions);
-                // Refresh task to get updated paa_answers
                 $task->refresh();
             }
 
-            // Finalize task - combine all answers and store
-            // Refresh one more time to ensure we have latest data
+            // Derive PAA list from task (includes [] when AlsoAsked returned no questions)
+            $paaQuestions = [];
+            if (is_array($task->alsoasked_questions)) {
+                $paaQuestions = $task->alsoasked_questions;
+                $serpCount = count($task->serp_questions ?? []);
+                $maxPaaQuestions = max(0, 10 - $serpCount);
+                if ($maxPaaQuestions === 0) {
+                    $paaQuestions = [];
+                } elseif (count($paaQuestions) > $maxPaaQuestions) {
+                    $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
+                }
+            }
+
+            if (! empty($paaQuestions) && empty($task->paa_answers)) {
+                $this->processPaaQuestions($task, $faqGeneratorService, $keyword, $paaQuestions);
+                $task->refresh();
+            }
+
             $task->refresh();
-            
-            // Only finalize if we have at least SERP answers
-            // If PAA is still pending, we'll finalize with SERP only
-            if (!empty($task->serp_answers) || !empty($task->paa_answers)) {
+
+            if (! empty($task->serp_answers) || ! empty($task->paa_answers)) {
                 $this->finalizeTask($task, $faqGeneratorService, true);
             } else {
-                // No answers yet, wait a bit more
                 dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
             }
 
         } catch (\Exception $e) {
-            // If we have SERP answers, don't fail completely - just log the error and finalize
             $task->refresh();
-            if (!empty($task->serp_answers)) {
-                \Illuminate\Support\Facades\Log::error('PAA processing error but SERP answers available: ' . $e->getMessage());
+            if (! empty($task->serp_answers) && $this->isAlsoAskedPhaseResolved($task)) {
+                \Illuminate\Support\Facades\Log::error('FAQ task error after SERP answers; finalizing: '.$e->getMessage());
                 $this->finalizeTask($task, $faqGeneratorService, true);
             } else {
                 $task->markAsFailed($e->getMessage());
             }
         }
+    }
+
+    protected function isAlsoAskedPhaseResolved(FaqTask $task): bool
+    {
+        if (empty($task->alsoasked_search_id) || ! is_string($task->alsoasked_search_id)) {
+            return true;
+        }
+
+        return $task->alsoasked_questions !== null;
+    }
+
+    /**
+     * Poll AlsoAsked until we can persist alsoasked_questions. Returns false if the worker should
+     * stop and a delayed job was scheduled.
+     */
+    protected function pollAlsoAskedAndPersist(FaqTask $task, AlsoAskedService $alsoAskedService): bool
+    {
+        $task->refresh();
+        if ($this->isAlsoAskedPhaseResolved($task)) {
+            return true;
+        }
+
+        $searchResults = $alsoAskedService->getSearchResults($task->alsoasked_search_id);
+
+        if (! $searchResults) {
+            $attempts = (int) (($task->options ?? [])['_alsoasked_null_results'] ?? 0);
+            if ($attempts + 1 >= self::ALSOASKED_NULL_RETRY_MAX) {
+                $opts = $task->options ?? [];
+                unset($opts['_alsoasked_null_results']);
+                $task->update([
+                    'alsoasked_questions' => [],
+                    'options' => $opts,
+                ]);
+
+                return true;
+            }
+            $opts = $task->options ?? [];
+            $opts['_alsoasked_null_results'] = $attempts + 1;
+            $task->update(['options' => $opts]);
+            dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
+
+            return false;
+        }
+
+        $status = $searchResults['status'] ?? 'unknown';
+
+        if ($status === 'running') {
+            $opts = $task->options ?? [];
+            unset($opts['_alsoasked_null_results']);
+            $task->update(['options' => $opts]);
+            dispatch(new self($this->taskId))->delay(now()->addSeconds(5));
+
+            return false;
+        }
+
+        $opts = $task->options ?? [];
+        unset($opts['_alsoasked_null_results']);
+
+        if ($status === 'success' || $status === 'no_records') {
+            $paaQuestions = [];
+            if ($status === 'success') {
+                $paaQuestions = $alsoAskedService->extractQuestions($searchResults);
+                $serpCount = count($task->serp_questions ?? []);
+                $maxPaa = max(0, 10 - $serpCount);
+                if ($maxPaa === 0) {
+                    $paaQuestions = [];
+                } elseif (count($paaQuestions) > $maxPaa) {
+                    $paaQuestions = array_slice($paaQuestions, 0, $maxPaa);
+                }
+            }
+            $task->update([
+                'alsoasked_questions' => $paaQuestions,
+                'options' => $opts,
+            ]);
+
+            return true;
+        }
+
+        $task->update([
+            'alsoasked_questions' => [],
+            'options' => $opts,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Strip job-only option keys so FAQ source hash / stored options stay stable.
+     *
+     * @return array<string, mixed>
+     */
+    protected function filterInternalTaskOptions(array $options): array
+    {
+        return array_filter(
+            $options,
+            static fn (mixed $_, int|string $k): bool => ! str_starts_with((string) $k, '_'),
+            ARRAY_FILTER_USE_KEY
+        );
     }
 
     /**
@@ -175,7 +212,7 @@ class ProcessFaqTask implements ShouldQueue
         string $keyword
     ): void {
         $serpQuestions = $task->serp_questions ?? [];
-        
+
         if (empty($serpQuestions)) {
             return;
         }
@@ -190,7 +227,7 @@ class ProcessFaqTask implements ShouldQueue
 
         // Get top keywords if not already available
         $topKeywords = [];
-        if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
+        if (! empty($task->question_keywords) && is_array($task->question_keywords)) {
             if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords'])) {
                 $topKeywords = $task->question_keywords['top_keywords'];
             }
@@ -203,8 +240,8 @@ class ProcessFaqTask implements ShouldQueue
                     $languageCode,
                     $locationCode
                 );
-                
-                if (!empty($topKeywords)) {
+
+                if (! empty($topKeywords)) {
                     $currentKeywords = $task->question_keywords ?? [];
                     $currentKeywords['top_keywords'] = $topKeywords;
                     $task->update(['question_keywords' => $currentKeywords]);
@@ -228,7 +265,7 @@ class ProcessFaqTask implements ShouldQueue
             // Store SERP answers immediately
             $task->update(['serp_answers' => $serpAnswers]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to generate SERP answers: ' . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error('Failed to generate SERP answers: '.$e->getMessage());
             // Don't throw - allow PAA processing to continue
         }
     }
@@ -250,12 +287,12 @@ class ProcessFaqTask implements ShouldQueue
         $serpCount = count($task->serp_questions ?? []);
         $paaCount = count($paaQuestions);
         $maxPaaQuestions = max(0, 10 - $serpCount);
-        
+
         if ($maxPaaQuestions === 0) {
             // SERP already has 10 questions, don't process any PAA
             return;
         }
-        
+
         if ($paaCount > $maxPaaQuestions) {
             // Limit PAA questions to fit within 10 total
             $paaQuestions = array_slice($paaQuestions, 0, $maxPaaQuestions);
@@ -266,7 +303,7 @@ class ProcessFaqTask implements ShouldQueue
 
         // Get top keywords if not already available
         $topKeywords = [];
-        if (!empty($task->question_keywords) && is_array($task->question_keywords)) {
+        if (! empty($task->question_keywords) && is_array($task->question_keywords)) {
             if (isset($task->question_keywords['top_keywords']) && is_array($task->question_keywords['top_keywords'])) {
                 $topKeywords = $task->question_keywords['top_keywords'];
             }
@@ -286,7 +323,7 @@ class ProcessFaqTask implements ShouldQueue
             // Store PAA answers
             $task->update(['paa_answers' => $paaAnswers]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Failed to generate PAA answers: ' . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error('Failed to generate PAA answers: '.$e->getMessage());
             // Don't throw - we already have SERP answers
         }
     }
@@ -302,31 +339,33 @@ class ProcessFaqTask implements ShouldQueue
     ): void {
         // Refresh task to get latest data
         $task->refresh();
-        
+
         $input = $task->url ?? $task->topic ?? '';
-        $sourceHash = $faqGeneratorService->getSourceHash($input, $task->options ?? []);
-        
+        $publicOptions = $this->filterInternalTaskOptions($task->options ?? []);
+        $sourceHash = $faqGeneratorService->getSourceHash($input, $publicOptions);
+
         // Check for existing FAQ
-        $existingFaq = $faqGeneratorService->findExistingFaq($input, $task->options ?? []);
+        $existingFaq = $faqGeneratorService->findExistingFaq($input, $publicOptions);
         if ($existingFaq && $task->isCompleted()) {
             $faqGeneratorService->incrementApiCallsSaved($existingFaq->id);
             $existingFaq->refresh();
+
             return;
         }
 
         // Combine SERP and PAA answers
         $allFaqs = [];
-        
+
         // Add SERP answers with source indicator
-        if (!empty($task->serp_answers) && is_array($task->serp_answers)) {
+        if (! empty($task->serp_answers) && is_array($task->serp_answers)) {
             foreach ($task->serp_answers as $faq) {
                 $faq['source'] = 'serp';
                 $allFaqs[] = $faq;
             }
         }
-        
+
         // Add PAA answers with source indicator
-        if (!empty($task->paa_answers) && is_array($task->paa_answers)) {
+        if (! empty($task->paa_answers) && is_array($task->paa_answers)) {
             foreach ($task->paa_answers as $faq) {
                 $faq['source'] = 'paa';
                 $allFaqs[] = $faq;
@@ -334,9 +373,10 @@ class ProcessFaqTask implements ShouldQueue
         }
 
         if (empty($allFaqs)) {
-            if (!$allowPartial) {
+            if (! $allowPartial) {
                 throw new \RuntimeException('No answers generated from any source');
             }
+
             // If allowing partial and no answers yet, just return (don't fail)
             return;
         }
@@ -349,6 +389,7 @@ class ProcessFaqTask implements ShouldQueue
                 $existingFaq->update(['faqs' => $allFaqs]);
                 $task->markAsCompleted($existingFaq->id);
                 $this->recordFaqUsage($task);
+
                 return;
             }
         }
@@ -358,11 +399,11 @@ class ProcessFaqTask implements ShouldQueue
             $task->url,
             $task->topic,
             $allFaqs,
-            $task->options ?? [],
+            $publicOptions,
             $sourceHash
         );
 
-        if (!$faqRecord || !$faqRecord->id) {
+        if (! $faqRecord || ! $faqRecord->id) {
             throw new \RuntimeException('Failed to store FAQs: Invalid FAQ record returned');
         }
 
@@ -375,6 +416,7 @@ class ProcessFaqTask implements ShouldQueue
         if ($task->credit_reservation_id) {
             app(\App\Domain\Billing\Contracts\WalletServiceInterface::class)
                 ->completeReservation($task->credit_reservation_id);
+
             return;
         }
         $user = $task->user;

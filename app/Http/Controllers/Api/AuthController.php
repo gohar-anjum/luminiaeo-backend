@@ -14,7 +14,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -29,15 +28,26 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         if (Auth::attempt($request->only('email', 'password'))) {
-            $token = auth()->user()->createToken("access-token");
-            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken, 'user' => \auth()->user()])->response();
+            $user = auth()->user();
+            if ($user->suspended_at !== null && ! $user->is_admin) {
+                Auth::logout();
+
+                return $this->responseModifier
+                    ->setMessage('Your account has been suspended.')
+                    ->setResponseCode(403)
+                    ->response();
+            }
+            $token = $user->createToken('access-token');
+
+            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken, 'user' => $user])->response();
         }
+
         return $this->responseModifier->setMessage('Invalid credentials')->setResponseCode(401)->response();
     }
 
     public function register(Request $request)
     {
-        $rules = new RegisterRequest();
+        $rules = new RegisterRequest;
         $validate = Validator::make($request->all(), $rules->rules());
         if ($validate->fails()) {
             return $this->responseModifier->setMessage($validate->errors()->first())->setResponseCode(422)->response();
@@ -65,7 +75,7 @@ class AuthController extends Controller
             $email = $request->validated()['email'];
             $user = User::where('email', $email)->first();
 
-            if (!$user) {
+            if (! $user) {
                 return $this->responseModifier
                     ->setMessage('If that email address exists in our system, we have sent a password reset link.')
                     ->response();
@@ -106,7 +116,7 @@ class AuthController extends Controller
                 ->where('email', $email)
                 ->first();
 
-            if (!$passwordReset) {
+            if (! $passwordReset) {
                 return $this->responseModifier
                     ->setMessage('Invalid or expired reset token.')
                     ->setResponseCode(400)
@@ -115,13 +125,14 @@ class AuthController extends Controller
 
             if (now()->diffInMinutes($passwordReset->created_at) > 60) {
                 DB::table('password_reset_tokens')->where('email', $email)->delete();
+
                 return $this->responseModifier
                     ->setMessage('Reset token has expired. Please request a new password reset.')
                     ->setResponseCode(400)
                     ->response();
             }
 
-            if (!Hash::check($token, $passwordReset->token)) {
+            if (! Hash::check($token, $passwordReset->token)) {
                 return $this->responseModifier
                     ->setMessage('Invalid reset token.')
                     ->setResponseCode(400)
@@ -129,7 +140,7 @@ class AuthController extends Controller
             }
 
             $user = User::where('email', $email)->first();
-            if (!$user) {
+            if (! $user) {
                 return $this->responseModifier
                     ->setMessage('User not found.')
                     ->setResponseCode(404)

@@ -13,5 +13,8 @@ return [
     'faq' => [
         'timeout' => env('CACHE_LOCK_FAQ_TIMEOUT', 120),
     ],
+    'keyword_cluster' => [
+        'timeout' => env('CACHE_LOCK_KEYWORD_CLUSTER_TIMEOUT', 300),
+        'wait_seconds' => env('CACHE_LOCK_KEYWORD_CLUSTER_WAIT', 90),
+    ],
 ];
-

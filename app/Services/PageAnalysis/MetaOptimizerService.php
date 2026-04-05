@@ -2,8 +2,8 @@
 
 namespace App\Services\PageAnalysis;
 
-use App\Models\MetaAnalysis;
 use App\Exceptions\PageAnalysisException;
+use App\Models\MetaAnalysis;
 use Illuminate\Http\Client\RequestException;
 
 class MetaOptimizerService
@@ -25,6 +25,8 @@ class MetaOptimizerService
 
         if ($keyword) {
             $query->where('target_keyword', $keyword);
+        } else {
+            $query->whereNull('target_keyword');
         }
 
         $recent = $query->first();
@@ -95,6 +97,7 @@ class MetaOptimizerService
             return null;
         }
         $first = $keywords[0];
+
         return is_array($first) ? ($first['phrase'] ?? null) : (string) $first;
     }
 }

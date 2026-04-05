@@ -18,7 +18,9 @@ use Illuminate\Support\Facades\Log;
 class BacklinksController extends Controller
 {
     use ValidatesResourceOwnership;
+
     protected BacklinksRepositoryInterface $repository;
+
     protected ApiResponseModifier $responseModifier;
 
     public function __construct(BacklinksRepositoryInterface $repository, ApiResponseModifier $responseModifier)
@@ -35,7 +37,8 @@ class BacklinksController extends Controller
                 $defaultLimit = config('services.dataforseo.backlinks.default_limit', 100);
                 $seoTask = $this->repository->createTask(
                     $validated['domain'],
-                    $validated['limit'] ?? $defaultLimit
+                    $validated['limit'] ?? $defaultLimit,
+                    $request->user()?->id
                 );
 
                 $payload = $seoTask->result ?? [];
@@ -65,12 +68,15 @@ class BacklinksController extends Controller
             });
         } catch (PbnDetectorException $e) {
             Log::error('PBN detector error', ['error' => $e->getMessage()]);
+
             return $this->responseModifier->setMessage($e->getMessage())->setResponseCode(502)->response();
         } catch (DataForSEOException $e) {
             Log::error('DataForSEO error', ['error' => $e->getMessage(), 'code' => $e->getErrorCode()]);
+
             return $this->responseModifier->setMessage($e->getMessage())->setResponseCode($e->getStatusCode())->response();
         } catch (\Exception $e) {
             Log::error('Unexpected error in backlinks submit', ['error' => $e->getMessage()]);
+
             return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }
@@ -82,7 +88,7 @@ class BacklinksController extends Controller
 
             $seoTask = $this->repository->getTaskStatus($validated['task_id']);
 
-            if (!$seoTask) {
+            if (! $seoTask) {
                 return $this->responseModifier
                     ->setMessage('Task not found')
                     ->setResponseCode(404)
@@ -104,9 +110,11 @@ class BacklinksController extends Controller
                 ->response();
         } catch (DataForSEOException $e) {
             Log::error('DataForSEO error', ['error' => $e->getMessage()]);
+
             return $this->responseModifier->setMessage($e->getMessage())->setResponseCode($e->getStatusCode())->response();
         } catch (\Exception $e) {
             Log::error('Unexpected error', ['error' => $e->getMessage()]);
+
             return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }
@@ -118,7 +126,7 @@ class BacklinksController extends Controller
 
             $seoTask = $this->repository->getTaskStatus($validated['task_id']);
 
-            if (!$seoTask) {
+            if (! $seoTask) {
                 return $this->responseModifier
                     ->setMessage('Task not found')
                     ->setResponseCode(404)
@@ -142,6 +150,7 @@ class BacklinksController extends Controller
                 ->response();
         } catch (\Exception $e) {
             Log::error('Unexpected error', ['error' => $e->getMessage()]);
+
             return $this->responseModifier->setMessage('An unexpected error occurred')->setResponseCode(500)->response();
         }
     }

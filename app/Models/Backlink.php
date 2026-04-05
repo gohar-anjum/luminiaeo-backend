@@ -29,6 +29,8 @@ class Backlink extends Model
         'safe_browsing_threats',
         'safe_browsing_checked_at',
         'backlink_spam_score',
+        'verification_status',
+        'verified_at',
     ];
 
     protected $casts = [
@@ -41,6 +43,7 @@ class Backlink extends Model
         'pbn_signals' => 'array',
         'safe_browsing_threats' => 'array',
         'safe_browsing_checked_at' => 'datetime',
+        'verified_at' => 'datetime',
     ];
 
     public function seoTask(): BelongsTo

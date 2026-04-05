@@ -175,12 +175,14 @@ services:
     environment:
       - CUSTOM_MODEL_PATH=/app/models/custom-keyword-clustering
       - MODEL_NAME=sentence-transformers/all-mpnet-base-v2
+      - TREE_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health').raise_for_status()"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      timeout: 15s
+      retries: 5
+      # First boot may download MiniLM + ONNX artifacts (several minutes) before /health OK
+      start_period: 600s
 
   # Keyword Clustering Training Service (One-time use)
   clustering-train:

@@ -35,8 +35,19 @@ Schedule::command('api-cache:purge')
     ->onOneServer()
     ->runInBackground();
 
+Schedule::command('keyword-cluster:purge-snapshots')
+    ->dailyAt('04:15')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->runInBackground();
+
 Schedule::command('api-cache:purge --logs')
     ->weeklyOn(0, '04:00')
     ->withoutOverlapping()
     ->onOneServer()
     ->runInBackground();
+
+Schedule::job(new \App\Jobs\RefreshAdminDashboardCacheJob)
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();

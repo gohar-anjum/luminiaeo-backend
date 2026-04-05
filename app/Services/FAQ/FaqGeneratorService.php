@@ -2,33 +2,38 @@
 
 namespace App\Services\FAQ;
 
-use App\DTOs\FaqGenerationDTO;
 use App\DTOs\FaqResponseDTO;
+use App\Exceptions\SerpException;
 use App\Interfaces\FaqRepositoryInterface;
+use App\Services\DataForSEO\DataForSEOService;
 use App\Services\LLM\LLMClient;
 use App\Services\LLM\Prompt\PlaceholderReplacer;
 use App\Services\LLM\Prompt\PromptLoader;
 use App\Services\LLM\Support\JsonExtractor;
-use App\Services\Serp\SerpService;
-use App\Services\FAQ\AlsoAskedService;
 use App\Services\LocationCodeService;
-use App\Services\DataForSEO\DataForSEOService;
-use App\Exceptions\SerpException;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Cache;
+use App\Services\Serp\SerpService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 
 class FaqGeneratorService
 {
     protected LLMClient $llmClient;
+
     protected FaqRepositoryInterface $faqRepository;
+
     protected PromptLoader $promptLoader;
+
     protected PlaceholderReplacer $placeholderReplacer;
+
     protected ?SerpService $serpService = null;
+
     protected ?AlsoAskedService $alsoAskedService = null;
+
     protected ?DataForSEOService $dataForSEOService = null;
+
     protected int $cacheTTL;
+
     protected int $timeout;
 
     public function __construct(
@@ -55,9 +60,9 @@ class FaqGeneratorService
         $url = $isUrl ? $this->normalizeUrl($input) : null;
         $topic = $isUrl ? null : $input;
 
-        $lockKey = 'faq:lock:' . md5(serialize([$url, $topic, $options]));
+        $lockKey = 'faq:lock:'.md5(serialize([$url, $topic, $options]));
         $timeout = config('cache_locks.faq.timeout', 120);
-        
+
         return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options) {
             $faqRecord = null;
 
@@ -66,7 +71,7 @@ class FaqGeneratorService
                 $faqRecords = \App\Models\Faq::whereNotNull('topic')
                     ->whereRaw('LOWER(TRIM(topic)) = ?', [$normalizedTopic])
                     ->get();
-                
+
                 if ($faqRecords->isNotEmpty()) {
                     $faqRecord = $faqRecords->sortByDesc('created_at')->first();
                 }
@@ -131,12 +136,16 @@ class FaqGeneratorService
             return $this->generateFaqsInternal($url, $topic, $options, $sourceHash, $cacheKey);
         });
     }
-    
+
     protected function generateFaqsInternal(string $url, ?string $topic, array $options, string $sourceHash, string $cacheKey): FaqResponseDTO
     {
+        if ($topic !== null && trim((string) $topic) !== '' && ! array_key_exists('enable_keywords', $options)) {
+            $options['enable_keywords'] = true;
+        }
+
         $urlContent = null;
         if ($url) {
-            $urlContentCacheKey = 'faq:url_content:' . md5($url);
+            $urlContentCacheKey = 'faq:url_content:'.md5($url);
             $urlContent = Cache::remember($urlContentCacheKey, 3600, function () use ($url) {
                 return $this->fetchUrlContent($url);
             });
@@ -158,10 +167,10 @@ class FaqGeneratorService
         }
 
         $topKeywords = [];
-        if (!empty($options['enable_keywords']) && $options['enable_keywords'] === true) {
+        if (! empty($options['enable_keywords']) && $options['enable_keywords'] === true) {
             $languageCode = $options['language_code'] ?? config('services.faq.default_language', 'en');
             $locationCode = $options['location_code'] ?? config('services.faq.default_location', 2840);
-            
+
             $topKeywords = $this->fetchKeywordsForTopic(
                 $topic,
                 $languageCode,
@@ -190,7 +199,7 @@ class FaqGeneratorService
 
                         $serpResponse = $this->fetchSerpResponse($url, $topic);
 
-                        if ($serpResponse && !empty($serpResponse)) {
+                        if ($serpResponse && ! empty($serpResponse)) {
                             $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
 
                             if (empty($faqs)) {
@@ -198,16 +207,16 @@ class FaqGeneratorService
                             }
                         } else {
                             // If all fallbacks fail, throw the last exception
-                            throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                            throw new \RuntimeException('All LLM APIs failed and SERP fallback unavailable. Last error: '.$lastException->getMessage());
                         }
                     }
                 } else {
                     // Circuit breaker open for GPT, try SERP fallback directly
                     $serpResponse = $this->fetchSerpResponse($url, $topic);
-                    if ($serpResponse && !empty($serpResponse)) {
+                    if ($serpResponse && ! empty($serpResponse)) {
                         $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
                     } else {
-                        throw new \RuntimeException('LLM circuit breaker open and SERP fallback unavailable. Last error: ' . $lastException->getMessage());
+                        throw new \RuntimeException('LLM circuit breaker open and SERP fallback unavailable. Last error: '.$lastException->getMessage());
                     }
                 }
             }
@@ -221,16 +230,16 @@ class FaqGeneratorService
                     $lastException = $gptException;
                     $this->recordLLMFailure('gpt');
                     $serpResponse = $this->fetchSerpResponse($url, $topic);
-                    if ($serpResponse && !empty($serpResponse)) {
+                    if ($serpResponse && ! empty($serpResponse)) {
                         $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
                     } else {
-                        throw new \RuntimeException('All LLM APIs circuit breaker open. Last error: ' . $gptException->getMessage());
+                        throw new \RuntimeException('All LLM APIs circuit breaker open. Last error: '.$gptException->getMessage());
                     }
                 }
             } else {
                 // Both circuit breakers open, use SERP fallback
                 $serpResponse = $this->fetchSerpResponse($url, $topic);
-                if ($serpResponse && !empty($serpResponse)) {
+                if ($serpResponse && ! empty($serpResponse)) {
                     $faqs = $this->generateFaqsFromSerpResponse($url, $topic, $serpResponse);
                 } else {
                     throw new \RuntimeException('All LLM APIs circuit breaker open and SERP fallback unavailable.');
@@ -269,6 +278,7 @@ class FaqGeneratorService
 
             $html = $response->body();
             $text = $this->extractTextFromHtml($html);
+
             return mb_substr($text, 0, 10000);
 
         } catch (\Exception $e) {
@@ -291,7 +301,7 @@ class FaqGeneratorService
     protected function fetchSerpQuestions(?string $url, ?string $topic, string $languageCode = 'en', int $locationCode = 2840): array
     {
         try {
-            if (!$this->isSerpServiceAvailable()) {
+            if (! $this->isSerpServiceAvailable()) {
                 return [];
             }
 
@@ -324,7 +334,7 @@ class FaqGeneratorService
         $baseUrl = config('services.serp.base_url');
         $apiKey = config('services.serp.api_key');
 
-        return !empty($baseUrl) && !empty($apiKey);
+        return ! empty($baseUrl) && ! empty($apiKey);
     }
 
     protected function getSerpService(): SerpService
@@ -354,6 +364,7 @@ class FaqGeneratorService
             $domain = parse_url($url, PHP_URL_HOST);
             if ($domain) {
                 $domain = str_replace('www.', '', $domain);
+
                 return $domain;
             }
         }
@@ -369,12 +380,12 @@ class FaqGeneratorService
             foreach ($serpResults['people_also_ask'] as $item) {
                 if (isset($item['question'])) {
                     $question = trim($item['question']);
-                    if (!empty($question)) {
+                    if (! empty($question)) {
                         $questions[] = $question;
                     }
                 } elseif (is_string($item)) {
                     $question = trim($item);
-                    if (!empty($question)) {
+                    if (! empty($question)) {
                         $questions[] = $question;
                     }
                 }
@@ -385,12 +396,12 @@ class FaqGeneratorService
             foreach ($serpResults['related_questions'] as $item) {
                 if (isset($item['question'])) {
                     $question = trim($item['question']);
-                    if (!empty($question) && !in_array($question, $questions)) {
+                    if (! empty($question) && ! in_array($question, $questions)) {
                         $questions[] = $question;
                     }
                 } elseif (is_string($item)) {
                     $question = trim($item);
-                    if (!empty($question) && !in_array($question, $questions)) {
+                    if (! empty($question) && ! in_array($question, $questions)) {
                         $questions[] = $question;
                     }
                 }
@@ -401,7 +412,7 @@ class FaqGeneratorService
             foreach ($serpResults['organic_results'] as $result) {
                 if (isset($result['title'])) {
                     $title = trim($result['title']);
-                    if (!empty($title) && preg_match('/\?/', $title)) {
+                    if (! empty($title) && preg_match('/\?/', $title)) {
                         $questions[] = $title;
                     }
                 }
@@ -417,19 +428,19 @@ class FaqGeneratorService
 
         if (isset($serpResponse['related_questions']) && is_array($serpResponse['related_questions'])) {
             foreach ($serpResponse['related_questions'] as $item) {
-                if (isset($item['question']) && !empty(trim($item['question']))) {
+                if (isset($item['question']) && ! empty(trim($item['question']))) {
                     $question = trim($item['question']);
                     $answer = '';
 
-                    if (isset($item['snippet']) && !empty(trim($item['snippet']))) {
+                    if (isset($item['snippet']) && ! empty(trim($item['snippet']))) {
                         $answer = trim($item['snippet']);
-                    } elseif (isset($item['answer']) && !empty(trim($item['answer']))) {
+                    } elseif (isset($item['answer']) && ! empty(trim($item['answer']))) {
                         $answer = trim($item['answer']);
-                    } elseif (isset($item['text']) && !empty(trim($item['text']))) {
+                    } elseif (isset($item['text']) && ! empty(trim($item['text']))) {
                         $answer = trim($item['text']);
                     }
 
-                    if (!empty($answer)) {
+                    if (! empty($answer)) {
                         $faqs[] = [
                             'question' => $question,
                             'answer' => $answer,
@@ -441,36 +452,36 @@ class FaqGeneratorService
 
         if (isset($serpResponse['knowledge_graph'])) {
             $kg = $serpResponse['knowledge_graph'];
-            
+
             if (isset($kg['free']['ai_overview']['text_blocks']) && is_array($kg['free']['ai_overview']['text_blocks'])) {
-                $question = $kg['free']['subtitle'] ?? 'Is ' . ($topic ?? 'it') . ' free?';
+                $question = $kg['free']['subtitle'] ?? 'Is '.($topic ?? 'it').' free?';
                 $answerParts = [];
-                
+
                 foreach ($kg['free']['ai_overview']['text_blocks'] as $block) {
-                    if (isset($block['snippet']) && !empty(trim($block['snippet']))) {
+                    if (isset($block['snippet']) && ! empty(trim($block['snippet']))) {
                         $answerParts[] = trim($block['snippet']);
                     }
                 }
-                
-                if (!empty($answerParts)) {
+
+                if (! empty($answerParts)) {
                     $faqs[] = [
                         'question' => $question,
                         'answer' => implode(' ', $answerParts),
                     ];
                 }
             }
-            
+
             if (isset($kg['pricing']['ai_overview']['text_blocks']) && is_array($kg['pricing']['ai_overview']['text_blocks'])) {
-                $question = $kg['pricing']['subtitle'] ?? ($topic ?? 'Product') . ' pricing';
+                $question = $kg['pricing']['subtitle'] ?? ($topic ?? 'Product').' pricing';
                 $answerParts = [];
-                
+
                 foreach ($kg['pricing']['ai_overview']['text_blocks'] as $block) {
-                    if (isset($block['snippet']) && !empty(trim($block['snippet']))) {
+                    if (isset($block['snippet']) && ! empty(trim($block['snippet']))) {
                         $answerParts[] = trim($block['snippet']);
                     }
                 }
-                
-                if (!empty($answerParts)) {
+
+                if (! empty($answerParts)) {
                     $faqs[] = [
                         'question' => $question,
                         'answer' => implode(' ', $answerParts),
@@ -480,7 +491,7 @@ class FaqGeneratorService
         }
 
         $faqs = array_slice($faqs, 0, 20);
-        
+
         return array_map(function ($faq) {
             return [
                 'question' => $faq['question'] ?? '',
@@ -492,7 +503,7 @@ class FaqGeneratorService
     public function fetchSerpResponse(?string $url, ?string $topic): ?array
     {
         try {
-            if (!$this->isSerpServiceAvailable()) {
+            if (! $this->isSerpServiceAvailable()) {
                 return null;
             }
 
@@ -523,7 +534,7 @@ class FaqGeneratorService
         try {
             $alsoAskedService = $this->getAlsoAskedService();
 
-            if (!$alsoAskedService->isAvailable()) {
+            if (! $alsoAskedService->isAvailable()) {
                 return [];
             }
 
@@ -572,8 +583,8 @@ class FaqGeneratorService
     public function fetchKeywordsForTopic(?string $topic, string $languageCode = 'en', int $locationCode = 2840): array
     {
         $dataForSEOService = $this->getDataForSEOService();
-        
-        if (!$dataForSEOService) {
+
+        if (! $dataForSEOService) {
             return [];
         }
 
@@ -588,8 +599,9 @@ class FaqGeneratorService
             $cachedKeywords = $cacheRepository->findByTopic($normalizedTopic, $languageCode, $locationCode);
 
             if ($cachedKeywords->isNotEmpty()) {
-                $keywordStrings = $cachedKeywords->pluck('keyword')->toArray();
-                return $keywordStrings;
+                $sorted = $cachedKeywords->sortByDesc(fn ($row) => (int) ($row->search_volume ?? 0));
+
+                return $sorted->pluck('keyword')->unique()->take(10)->values()->all();
             }
 
             $allKeywords = [];
@@ -623,44 +635,57 @@ class FaqGeneratorService
                 return [];
             }
 
-            // $keywordsWithVolume = [];
-            // $seenKeywords = [];
-            // 
-            // foreach ($allKeywords as $keywordData) {
-            //     if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
-            //         $keywordLower = strtolower(trim($keywordData->keyword));
-            //         
-            //         if (!isset($seenKeywords[$keywordLower])) {
-            //             $keywordsWithVolume[] = $keywordData;
-            //             $seenKeywords[$keywordLower] = true;
-            //         }
-            //     }
-            // }
-            // 
-            // usort($keywordsWithVolume, function ($a, $b) {
-            //     $volumeA = $a->searchVolume ?? 0;
-            //     $volumeB = $b->searchVolume ?? 0;
-            //     return $volumeB <=> $volumeA;
-            // });
-            // 
-            // $topKeywords = array_slice($keywordsWithVolume, 0, 10);
-            // $keywordStrings = array_map(fn($kw) => $kw->keyword, $topKeywords);
+            $keywordsWithVolume = [];
+            $seenKeywords = [];
 
-            $keywordStrings = array_map(fn($kw) => $kw->keyword, $allKeywords);
+            foreach ($allKeywords as $keywordData) {
+                if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
+                    $keywordLower = strtolower(trim($keywordData->keyword));
 
-            if (!empty($allKeywords) && $dataForSEOService) {
+                    if (! isset($seenKeywords[$keywordLower])) {
+                        $keywordsWithVolume[] = $keywordData;
+                        $seenKeywords[$keywordLower] = true;
+                    }
+                }
+            }
+
+            usort($keywordsWithVolume, function ($a, $b) {
+                $volumeA = $a->searchVolume ?? 0;
+                $volumeB = $b->searchVolume ?? 0;
+
+                return $volumeB <=> $volumeA;
+            });
+
+            $topKeywordDtos = array_slice($keywordsWithVolume, 0, 10);
+            $keywordStrings = array_map(fn ($kw) => $kw->keyword, $topKeywordDtos);
+
+            if ($keywordStrings === [] && $allKeywords !== []) {
+                $byKw = [];
+                foreach ($allKeywords as $keywordData) {
+                    if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
+                        $kl = strtolower(trim($keywordData->keyword));
+                        if (! isset($byKw[$kl])) {
+                            $byKw[$kl] = $keywordData;
+                        }
+                    }
+                }
+                $topKeywordDtos = array_slice(array_values($byKw), 0, 10);
+                $keywordStrings = array_map(fn ($kw) => $kw->keyword, $topKeywordDtos);
+            }
+
+            if ($topKeywordDtos !== [] && $dataForSEOService) {
                 try {
                     $cacheRepository = app(\App\Interfaces\KeywordCacheRepositoryInterface::class);
                     $cacheData = [];
 
-                    foreach ($allKeywords as $keywordData) {
+                    foreach ($topKeywordDtos as $keywordData) {
                         if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
                             $existingMetadata = [];
                             $existingCache = $cacheRepository->find($keywordData->keyword, $languageCode, $locationCode);
-                            
+
                             if ($existingCache && $existingCache->metadata) {
-                                $existingMetadata = is_array($existingCache->metadata) 
-                                    ? $existingCache->metadata 
+                                $existingMetadata = is_array($existingCache->metadata)
+                                    ? $existingCache->metadata
                                     : json_decode($existingCache->metadata, true) ?? [];
                             }
 
@@ -687,7 +712,7 @@ class FaqGeneratorService
                         }
                     }
 
-                    if (!empty($cacheData)) {
+                    if (! empty($cacheData)) {
                         $cacheRepository->bulkUpdate($cacheData);
                     }
                 } catch (\Exception $e) {
@@ -704,8 +729,8 @@ class FaqGeneratorService
     public function fetchKeywordsForQuestions(array $questions, string $languageCode = 'en', int $locationCode = 2840, int $keywordsPerQuestion = 10): array
     {
         $dataForSEOService = $this->getDataForSEOService();
-        
-        if (!$dataForSEOService) {
+
+        if (! $dataForSEOService) {
             return [];
         }
 
@@ -725,7 +750,7 @@ class FaqGeneratorService
                 $keywordStrings = [];
                 foreach ($keywords as $keywordData) {
                     $keywordValue = null;
-                    
+
                     if (is_object($keywordData)) {
                         if ($keywordData instanceof \App\DTOs\KeywordDataDTO) {
                             $keywordValue = $keywordData->keyword;
@@ -737,14 +762,14 @@ class FaqGeneratorService
                     } elseif (is_array($keywordData)) {
                         $keywordValue = $keywordData['keyword'] ?? null;
                     }
-                    
-                    if ($keywordValue !== null && !empty(trim($keywordValue))) {
+
+                    if ($keywordValue !== null && ! empty(trim($keywordValue))) {
                         $keywordStrings[] = trim($keywordValue);
                     }
                 }
 
                 $keywordStrings = array_slice($keywordStrings, 0, $keywordsPerQuestion);
-                
+
                 $questionKeywords[$question] = $keywordStrings;
 
                 usleep(100000);
@@ -784,7 +809,7 @@ class FaqGeneratorService
                 }
             }
 
-            if (!$isDuplicate) {
+            if (! $isDuplicate) {
                 $uniqueQuestions[] = $question;
                 $seenQuestions[$questionLower] = true;
             }
@@ -824,7 +849,7 @@ class FaqGeneratorService
                 }
             }
 
-            if (!$isDuplicate) {
+            if (! $isDuplicate) {
                 $uniqueQuestions[] = $questionText;
                 $seenQuestions[$questionLower] = true;
             }
@@ -856,7 +881,7 @@ class FaqGeneratorService
         $sourceQuestionsLower = array_map('strtolower', $sourceQuestions);
 
         foreach ($faqs as $faq) {
-            if (!isset($faq['question'])) {
+            if (! isset($faq['question'])) {
                 continue;
             }
 
@@ -931,22 +956,22 @@ class FaqGeneratorService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
-                throw new \RuntimeException('Gemini API error: ' . $response->body());
+                throw new \RuntimeException('Gemini API error: '.$response->body());
             }
 
             $responseData = $response->json();
             $text = $this->extractTextFromGeminiResponse($responseData);
-            
+
             $faqs = $this->parseFaqResponse($text);
 
-            if (!empty($serpQuestions)) {
+            if (! empty($serpQuestions)) {
                 $this->validateQuestionsUsage($faqs, $serpQuestions);
             }
 
             return $this->validateAndFormatFaqs($faqs, count($serpQuestions), $topKeywords);
 
         } catch (\Exception $e) {
-            throw new \RuntimeException('Failed to generate FAQs: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to generate FAQs: '.$e->getMessage());
         }
     }
 
@@ -970,30 +995,30 @@ class FaqGeneratorService
         }
 
         $questionsSection = '';
-        if (!empty($serpQuestions)) {
+        if (! empty($serpQuestions)) {
             $questionsList = implode("\n", array_map(function ($question, $index) {
-                return ($index + 1) . ". " . $question;
+                return ($index + 1).'. '.$question;
             }, $serpQuestions, array_keys($serpQuestions)));
 
             $questionsSection = "*** CRITICAL: QUESTIONS TO ANSWER (from SERP and AlsoAsked.io) ***\n";
-            $questionsSection .= "You MUST answer these questions. DO NOT create your own questions. ";
-            $questionsSection .= "These are real questions that users are actively searching for. ";
+            $questionsSection .= 'You MUST answer these questions. DO NOT create your own questions. ';
+            $questionsSection .= 'These are real questions that users are actively searching for. ';
             $questionsSection .= "You must provide comprehensive answers for at least 8-10 of these questions.\n\n";
-            
+
             $questionsSection .= "QUESTIONS TO ANSWER:\n";
             $questionsSection .= "{$questionsList}\n\n";
-            
-            if (!empty($topKeywords) && is_array($topKeywords)) {
-                $keywordsList = implode(', ', $topKeywords);
+
+            if (! empty($topKeywords) && is_array($topKeywords)) {
+                $keywordsList = implode(', ', array_slice($topKeywords, 0, 10));
                 $questionsSection .= "*** SEO KEYWORDS (Top 10 by Audience) ***\n";
                 $questionsSection .= "The following keywords are highly relevant to this topic (sorted by search volume):\n";
                 $questionsSection .= "{$keywordsList}\n\n";
-                $questionsSection .= "When answering the questions above, naturally incorporate these keywords into your answers ";
+                $questionsSection .= 'When answering the questions above, naturally incorporate these keywords into your answers ';
                 $questionsSection .= "where relevant to improve search engine optimization. Use keywords organically and contextually.\n";
                 $questionsSection .= "After each answer, indicate which keywords (from the list above) you used in that answer.\n\n";
             }
-            
-            $questionsSection .= "*** YOUR TASK: Answer these questions based on the provided content. ";
+
+            $questionsSection .= '*** YOUR TASK: Answer these questions based on the provided content. ';
             $questionsSection .= "DO NOT generate new questions - only answer the questions provided above. ***\n\n";
         }
 
@@ -1006,7 +1031,7 @@ class FaqGeneratorService
         $systemPrompt = $template['system'] ?? '';
         $userTemplate = $template['user'] ?? '';
         $userPrompt = $this->placeholderReplacer->replace($userTemplate, $replacements);
-        $fullPrompt = trim($systemPrompt) . "\n\n" . trim($userPrompt);
+        $fullPrompt = trim($systemPrompt)."\n\n".trim($userPrompt);
 
         return $fullPrompt;
     }
@@ -1048,7 +1073,7 @@ class FaqGeneratorService
             'messages' => $messages,
         ];
 
-        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions';
+        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/').'/chat/completions';
 
         try {
             $response = Http::withToken($config['api_key'])
@@ -1057,22 +1082,22 @@ class FaqGeneratorService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
-                throw new \RuntimeException('OpenAI API error: ' . $response->body());
+                throw new \RuntimeException('OpenAI API error: '.$response->body());
             }
 
             $responseData = $response->json();
             $text = $this->extractTextFromGPTResponse($responseData);
-            
+
             $faqs = $this->parseFaqResponse($text);
 
-            if (!empty($serpQuestions)) {
+            if (! empty($serpQuestions)) {
                 $this->validateQuestionsUsage($faqs, $serpQuestions);
             }
 
             return $this->validateAndFormatFaqs($faqs, count($serpQuestions), $topKeywords);
 
         } catch (\Exception $e) {
-            throw new \RuntimeException('Failed to generate FAQs: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to generate FAQs: '.$e->getMessage());
         }
     }
 
@@ -1099,7 +1124,7 @@ class FaqGeneratorService
 
         if (empty($json)) {
             $extracted = JsonExtractor::extract($text);
-            if (!empty($extracted)) {
+            if (! empty($extracted)) {
                 $testDecode = json_decode($extracted, true);
                 if (json_last_error() === JSON_ERROR_NONE && is_array($testDecode)) {
                     if (array_values($testDecode) === $testDecode) {
@@ -1116,7 +1141,7 @@ class FaqGeneratorService
         $data = json_decode($json, true);
         $lastError = json_last_error();
 
-        if ($lastError === JSON_ERROR_NONE && is_string($data) && !empty($data)) {
+        if ($lastError === JSON_ERROR_NONE && is_string($data) && ! empty($data)) {
             $data = json_decode($data, true);
             $lastError = json_last_error();
         }
@@ -1129,11 +1154,11 @@ class FaqGeneratorService
         }
 
         if ($lastError !== JSON_ERROR_NONE) {
-            throw new \RuntimeException('Invalid JSON in FAQ response: ' . json_last_error_msg());
+            throw new \RuntimeException('Invalid JSON in FAQ response: '.json_last_error_msg());
         }
 
-        if (!is_array($data)) {
-            throw new \RuntimeException('FAQ response must be an array, got: ' . gettype($data));
+        if (! is_array($data)) {
+            throw new \RuntimeException('FAQ response must be an array, got: '.gettype($data));
         }
 
         if (isset($data['question']) && isset($data['answer'])) {
@@ -1142,7 +1167,7 @@ class FaqGeneratorService
             $data = array_values($data);
         }
 
-        if (!empty($data) && is_string($data[0])) {
+        if (! empty($data) && is_string($data[0])) {
             throw new \RuntimeException('FAQ items are strings instead of objects. JSON parsing failed.');
         }
 
@@ -1155,7 +1180,7 @@ class FaqGeneratorService
         $seenQuestions = [];
 
         foreach ($faqs as $index => $faq) {
-            if (!is_array($faq)) {
+            if (! is_array($faq)) {
                 continue;
             }
 
@@ -1181,13 +1206,13 @@ class FaqGeneratorService
 
             $detectedKeywords = [];
 
-            if (isset($faq['keywords']) && is_array($faq['keywords']) && !empty($faq['keywords'])) {
+            if (isset($faq['keywords']) && is_array($faq['keywords']) && ! empty($faq['keywords'])) {
                 $detectedKeywords = array_values(array_filter(array_map('trim', $faq['keywords'])));
-            } elseif (isset($faq['used_keywords']) && is_array($faq['used_keywords']) && !empty($faq['used_keywords'])) {
+            } elseif (isset($faq['used_keywords']) && is_array($faq['used_keywords']) && ! empty($faq['used_keywords'])) {
                 $detectedKeywords = array_values(array_filter(array_map('trim', $faq['used_keywords'])));
             }
 
-            if (empty($detectedKeywords) && !empty($topKeywords)) {
+            if (empty($detectedKeywords) && ! empty($topKeywords)) {
                 $answerText = strtolower($answer);
                 foreach ($topKeywords as $keyword) {
                     if (stripos($answerText, strtolower($keyword)) !== false) {
@@ -1196,7 +1221,7 @@ class FaqGeneratorService
                 }
             }
 
-            if (!empty($detectedKeywords)) {
+            if (! empty($detectedKeywords)) {
                 $faqItem['keywords'] = array_unique($detectedKeywords);
             }
 
@@ -1228,13 +1253,14 @@ class FaqGeneratorService
         }
 
         $finalFaqs = array_slice($validated, 0, 10);
-        
+
         return $finalFaqs;
     }
 
     protected function getCacheKey(?string $url, ?string $topic, array $options): string
     {
-        $key = 'faq_generator:' . md5(($url ?? '') . '|' . ($topic ?? '') . '|' . serialize($options));
+        $key = 'faq_generator:'.md5(($url ?? '').'|'.($topic ?? '').'|'.serialize($options));
+
         return $key;
     }
 
@@ -1264,6 +1290,7 @@ class FaqGeneratorService
         if ($existingFaq) {
             $this->faqRepository->incrementApiCallsSaved($existingFaq->id);
             $existingFaq->refresh();
+
             return $existingFaq;
         }
 
@@ -1289,19 +1316,20 @@ class FaqGeneratorService
                     }
                     usleep(100000);
                 }
-                
+
                 if ($existingFaq) {
                     $this->faqRepository->incrementApiCallsSaved($existingFaq->id);
                     $existingFaq->refresh();
+
                     return $existingFaq;
                 }
-                
+
                 throw new \RuntimeException('Duplicate entry detected but existing FAQ not found. This may indicate a database consistency issue.');
             }
-            
-            throw new \RuntimeException('Failed to store FAQs in database: ' . $e->getMessage());
+
+            throw new \RuntimeException('Failed to store FAQs in database: '.$e->getMessage());
         } catch (\Exception $e) {
-            throw new \RuntimeException('Failed to store FAQs in database: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to store FAQs in database: '.$e->getMessage());
         }
     }
 
@@ -1339,7 +1367,7 @@ class FaqGeneratorService
         }
 
         if (preg_match('/^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}/i', $url)) {
-            return 'https://' . $url;
+            return 'https://'.$url;
         }
 
         return $url;
@@ -1357,6 +1385,7 @@ class FaqGeneratorService
     public function findExistingFaq(string $input, array $options = []): ?\App\Models\Faq
     {
         $sourceHash = $this->getSourceHash($input, $options);
+
         return $this->faqRepository->findByHash($sourceHash);
     }
 
@@ -1375,20 +1404,20 @@ class FaqGeneratorService
         $url = $isUrl ? $this->normalizeUrl($input) : null;
         $topic = $isUrl ? null : $input;
 
-        $lockKey = 'faq:task:lock:' . md5(serialize([$url, $topic, $options]));
+        $lockKey = 'faq:task:lock:'.md5(serialize([$url, $topic, $options]));
         $timeout = config('cache_locks.faq.timeout', 120);
-        
+
         return Cache::lock($lockKey, $timeout)->get(function () use ($url, $topic, $options, $creditReservationId) {
             $normalizedTopic = $topic ? strtolower(trim($topic)) : null;
             $normalizedUrl = $url ? $this->normalizeUrl($url) : null;
 
             $query = \App\Models\FaqTask::whereIn('status', ['pending', 'processing']);
-            
+
             if ($normalizedTopic) {
                 $query->whereNotNull('topic')
-                      ->whereRaw('LOWER(TRIM(topic)) = ?', [$normalizedTopic]);
+                    ->whereRaw('LOWER(TRIM(topic)) = ?', [$normalizedTopic]);
                 if ($normalizedUrl) {
-                    $query->where(function($q) use ($normalizedUrl) {
+                    $query->where(function ($q) use ($normalizedUrl) {
                         $q->where('url', $normalizedUrl)->orWhereNull('url');
                     });
                 } else {
@@ -1401,19 +1430,19 @@ class FaqGeneratorService
             }
 
             $existingTask = $query->orderBy('created_at', 'desc')->first();
-            
+
             if ($existingTask) {
                 return $existingTask;
             }
-            
+
             $failedQuery = \App\Models\FaqTask::where('status', 'failed')
                 ->whereNotNull('serp_questions');
-            
+
             if ($normalizedTopic) {
                 $failedQuery->whereNotNull('topic')
-                      ->whereRaw('LOWER(TRIM(topic)) = ?', [$normalizedTopic]);
+                    ->whereRaw('LOWER(TRIM(topic)) = ?', [$normalizedTopic]);
                 if ($normalizedUrl) {
-                    $failedQuery->where(function($q) use ($normalizedUrl) {
+                    $failedQuery->where(function ($q) use ($normalizedUrl) {
                         $q->where('url', $normalizedUrl)->orWhereNull('url');
                     });
                 } else {
@@ -1426,35 +1455,36 @@ class FaqGeneratorService
             }
 
             $failedTask = $failedQuery->orderBy('created_at', 'desc')->first();
-            
+
             if ($failedTask) {
                 $hasKeywords = false;
-                if (!empty($failedTask->question_keywords) && is_array($failedTask->question_keywords)) {
+                if (! empty($failedTask->question_keywords) && is_array($failedTask->question_keywords)) {
                     $totalKeywords = 0;
                     foreach ($failedTask->question_keywords as $keywords) {
-                        if (is_array($keywords) && !empty($keywords)) {
+                        if (is_array($keywords) && ! empty($keywords)) {
                             $totalKeywords += count($keywords);
                         }
                     }
                     $hasKeywords = $totalKeywords > 0;
                 }
-                
-                if (!$hasKeywords && !empty($failedTask->serp_questions)) {
+
+                if (! $hasKeywords && ! empty($failedTask->serp_questions)) {
                     $failedTask->update([
                         'status' => 'pending',
                         'error_message' => null,
                     ]);
                     \App\Jobs\ProcessFaqTask::dispatch($failedTask->id);
+
                     return $failedTask;
                 }
             }
 
             $serpQuestions = $this->fetchSerpQuestions($url, $topic);
-            
+
             if (empty($serpQuestions)) {
                 throw new \RuntimeException('No questions found from SERP. Please ensure SERP service is configured.');
             }
-            
+
             // STRICTLY limit SERP questions to 10 max when storing
             if (count($serpQuestions) > 10) {
                 $serpQuestions = array_slice($serpQuestions, 0, 10);
@@ -1465,8 +1495,8 @@ class FaqGeneratorService
 
             if ($alsoAskedService->isAvailable()) {
                 $searchQuery = $this->buildSearchQuery($url, $topic);
-                
-                if (!empty($searchQuery)) {
+
+                if (! empty($searchQuery)) {
                     $termsArray = [$searchQuery];
                     $alsoAskedSearchId = $alsoAskedService->createAsyncSearchJob(
                         $termsArray,
@@ -1507,20 +1537,21 @@ class FaqGeneratorService
     protected function mapLocationCodeToRegion(int $locationCode): string
     {
         $locationCodeService = app(LocationCodeService::class);
+
         return $locationCodeService->mapLocationCodeToRegion($locationCode, 'us');
     }
 
     protected function shouldTryLLM(string $provider): bool
     {
         $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        $failureCount = Cache::get($circuitBreakerKey . ':failures', 0);
-        $lastFailure = Cache::get($circuitBreakerKey . ':last_failure');
+        $failureCount = Cache::get($circuitBreakerKey.':failures', 0);
+        $lastFailure = Cache::get($circuitBreakerKey.':last_failure');
 
         if ($failureCount >= 5) {
             if ($lastFailure && now()->diffInMinutes($lastFailure) < 10) {
                 return false;
             }
-            Cache::forget($circuitBreakerKey . ':failures');
+            Cache::forget($circuitBreakerKey.':failures');
         }
 
         return true;
@@ -1529,15 +1560,15 @@ class FaqGeneratorService
     protected function recordLLMSuccess(string $provider): void
     {
         $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        Cache::forget($circuitBreakerKey . ':failures');
-        Cache::forget($circuitBreakerKey . ':last_failure');
+        Cache::forget($circuitBreakerKey.':failures');
+        Cache::forget($circuitBreakerKey.':last_failure');
     }
 
     protected function recordLLMFailure(string $provider): void
     {
         $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        $failures = Cache::increment($circuitBreakerKey . ':failures', 1);
-        Cache::put($circuitBreakerKey . ':last_failure', now(), 600);
+        $failures = Cache::increment($circuitBreakerKey.':failures', 1);
+        Cache::put($circuitBreakerKey.':last_failure', now(), 600);
     }
 
     /**
@@ -1558,7 +1589,7 @@ class FaqGeneratorService
 
         $urlContent = null;
         if ($url) {
-            $urlContentCacheKey = 'faq:url_content:' . md5($url);
+            $urlContentCacheKey = 'faq:url_content:'.md5($url);
             $urlContent = Cache::remember($urlContentCacheKey, 3600, function () use ($url) {
                 return $this->fetchUrlContent($url);
             });
@@ -1600,10 +1631,10 @@ class FaqGeneratorService
                     } catch (\Exception $gptException) {
                         $lastException = $gptException;
                         $this->recordLLMFailure('gpt');
-                        throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                        throw new \RuntimeException('Failed to generate answers: '.$lastException->getMessage());
                     }
                 } else {
-                    throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                    throw new \RuntimeException('Failed to generate answers: '.$lastException->getMessage());
                 }
             }
         } else {
@@ -1623,7 +1654,7 @@ class FaqGeneratorService
                 } catch (\Exception $gptException) {
                     $lastException = $gptException;
                     $this->recordLLMFailure('gpt');
-                    throw new \RuntimeException('Failed to generate answers: ' . $lastException->getMessage());
+                    throw new \RuntimeException('Failed to generate answers: '.$lastException->getMessage());
                 }
             } else {
                 throw new \RuntimeException('All LLM APIs circuit breaker open.');
@@ -1686,18 +1717,18 @@ class FaqGeneratorService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
-                throw new \RuntimeException('Gemini API error: ' . $response->body());
+                throw new \RuntimeException('Gemini API error: '.$response->body());
             }
 
             $responseData = $response->json();
             $text = $this->extractTextFromGeminiResponse($responseData);
-            
+
             $faqs = $this->parseFaqResponse($text);
 
             return $this->validateAndFormatFaqs($faqs, count($questions), $topKeywords);
 
         } catch (\Exception $e) {
-            throw new \RuntimeException('Failed to generate answers with Gemini: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to generate answers with Gemini: '.$e->getMessage());
         }
     }
 
@@ -1739,7 +1770,7 @@ class FaqGeneratorService
             'messages' => $messages,
         ];
 
-        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/') . '/chat/completions';
+        $endpoint = rtrim($config['base_url'] ?? 'https://api.openai.com/v1', '/').'/chat/completions';
 
         try {
             $response = Http::withToken($config['api_key'])
@@ -1748,23 +1779,24 @@ class FaqGeneratorService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
-                throw new \RuntimeException('OpenAI API error: ' . $response->body());
+                throw new \RuntimeException('OpenAI API error: '.$response->body());
             }
 
             $responseData = $response->json();
             $text = $this->extractTextFromGPTResponse($responseData);
-            
+
             $faqs = $this->parseFaqResponse($text);
 
             return $this->validateAndFormatFaqs($faqs, count($questions), $topKeywords);
 
         } catch (\Exception $e) {
-            throw new \RuntimeException('Failed to generate answers with GPT: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to generate answers with GPT: '.$e->getMessage());
         }
     }
 
     /**
-     * Build a keyword-focused prompt for answering questions.
+     * Build a keyword-focused prompt for progressive FAQ answers (SERP / PAA batches).
+     * Uses {@see resource_path('prompts/faq/answer_batch.md')} so JSON shape matches sync {@see buildFaqPrompt}.
      */
     protected function buildKeywordFocusedPrompt(
         array $questions,
@@ -1774,41 +1806,51 @@ class FaqGeneratorService
         ?string $urlContent,
         array $topKeywords = []
     ): string {
-        $contextSection = "Context: Generate answers for the following questions related to the keyword: \"{$keyword}\"\n\n";
+        $contextLines = [
+            'Primary focus (target keyword / topic anchor): "'.str_replace('"', '\"', $keyword).'"',
+        ];
 
         if ($topic) {
-            $contextSection .= "Topic/Subject: {$topic}\n\n";
+            $contextLines[] = 'Topic / subject: '.$topic;
         }
 
         if ($url) {
-            $contextSection .= "Target URL: {$url}\n";
+            $contextLines[] = 'Target URL: '.$url;
             if ($urlContent) {
-                $urlContent = mb_substr($urlContent, 0, 3000);
-                $contextSection .= "Website Content (for context):\n{$urlContent}\n\n";
+                $snippet = mb_substr($urlContent, 0, 4000);
+                $contextLines[] = "Page/content excerpt (for grounding):\n".$snippet;
             }
         }
 
-        $questionsList = implode("\n", array_map(function ($question, $index) {
-            return ($index + 1) . ". " . $question;
-        }, $questions, array_keys($questions)));
+        $contextBlock = implode("\n\n", $contextLines);
 
-        $prompt = $contextSection;
-        $prompt .= "Questions:\n{$questionsList}\n\n";
-        $prompt .= "Requirements:\n";
-        $prompt .= "- Answers should be keyword-focused and SEO-optimized\n";
-        $prompt .= "- Each answer should be comprehensive but concise\n";
-        $prompt .= "- Answers should be suitable for FAQ schema markup\n";
-        $prompt .= "- Maintain consistency in tone and style\n";
-        $prompt .= "- Focus on the keyword: \"{$keyword}\" when relevant\n";
+        $questionLines = [];
+        foreach (array_values($questions) as $i => $q) {
+            $questionLines[] = ($i + 1).'. '.(is_string($q) ? $q : (string) $q);
+        }
+        $questionsNumbered = implode("\n", $questionLines);
 
-        if (!empty($topKeywords) && is_array($topKeywords)) {
-            $keywordsList = implode(', ', array_slice($topKeywords, 0, 10));
-            $prompt .= "\nSEO Keywords to incorporate naturally: {$keywordsList}\n";
+        $top = array_values(array_filter(array_slice($topKeywords, 0, 10)));
+        if ($top !== []) {
+            $list = implode(', ', $top);
+            $seoKeywordsBlock = "*** SEO KEYWORDS (top by search volume — use only where natural) ***\n"
+                ."Allowed supporting phrases for each answer's \"keywords\" array:\n{$list}\n\n"
+                .'List **only** terms from this block (or the primary focus) that actually appear in that answer.';
+        } else {
+            $seoKeywordsBlock = "*** SEO KEYWORDS ***\n"
+                .'No separate keyword list was supplied. For each answer, set "keywords" to short phrases from the answer that reflect the primary focus.';
         }
 
-        $prompt .= "\nPlease provide answers in JSON format as an array of objects with 'question' and 'answer' fields.\n";
-        $prompt .= "Example format: [{\"question\": \"Question text\", \"answer\": \"Answer text\"}, ...]\n";
+        $template = $this->promptLoader->load('faq/answer_batch');
+        $user = $this->placeholderReplacer->replace($template['user'] ?? '', [
+            'context_block' => $contextBlock,
+            'questions_numbered' => $questionsNumbered,
+            'seo_keywords_block' => $seoKeywordsBlock,
+        ]);
 
-        return $prompt;
+        $system = trim($template['system'] ?? '');
+        $user = trim($user);
+
+        return $system !== '' ? $system."\n\n".$user : $user;
     }
 }

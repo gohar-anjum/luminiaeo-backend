@@ -1,0 +1,1035 @@
+{
+  "info": {
+    "name": "LuminiaEO API",
+    "description": "REST API for the LuminiaEO Laravel backend (keyword research, clusters, citations, SERP, page analysis, billing).\n\n## Base URL\nSet `base_url` (e.g. `http://localhost` or your deployed origin). All routes below are under `/api`.\n\n## Authentication\nProtected routes use **Laravel Sanctum** personal access tokens. Call **Login** or use a token from your app, then set `auth_token`. Send header: `Authorization: Bearer {{auth_token}}` and `Accept: application/json`.\n\n## Response shape (most endpoints)\nControllers using `ApiResponseModifier` return JSON:\n```json\n{\n  \"status\": <http_status>,\n  \"message\": \"...\",\n  \"response\": { ... }\n}\n```\n**Exceptions:** `GET /api/health` returns a plain `{ \"status\", \"timestamp\", \"checks\" }` object. Some flows (e.g. keyword ideas) may return other shapes.\n\n## Credits\nSeveral routes use the `credit.deduct` middleware (reserves/completes credits). Insufficient balance may yield **402** with a JSON body (see keyword clusters). Use **Billing → Balance** and **Features** to inspect costs.\n\n## Rate limits (per user, per minute)\n- Citations: 20\n- Keyword research: 10\n- Keyword clusters: 15\n- Keyword planner: 20\n- SEO / DataForSEO: 60\n- SERP: 60\n- FAQ: 30\n- Page analysis: 30\n\n## Stripe\n`POST /api/billing/webhook` is for **Stripe** only (signature verification). Do not call from Postman unless you simulate Stripe signatures.\n\n## Web OAuth\nGoogle OAuth lives on **web** routes (`/google/authorize`, `/google/callback`), not under `/api`.\n\n## Admin (billable features)\nFolder **Admin — billable features**: `GET/POST/PATCH /api/admin/features*`. Requires **`is_admin`** user token (`403` otherwise). Documented in `docs/ADMIN_API_INTEGRATION.md`. Customer-facing feature list remains **Billing → Features** (`GET /api/billing/features`, active only).\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost" },
+    { "key": "auth_token", "value": "" },
+    { "key": "citation_task_id", "value": "1" },
+    { "key": "keyword_research_id", "value": "1" },
+    { "key": "cluster_job_id", "value": "1" },
+    { "key": "faq_task_id", "value": "" },
+    { "key": "backlinks_task_id", "value": "" },
+    { "key": "admin_feature_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Health & diagnostics",
+      "description": "Operational checks. No authentication required.",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/health",
+            "description": "Returns database, cache (Redis), and Redis connectivity. HTTP **200** with `status` `healthy`, or **200**/`503` with `degraded`/`unhealthy` in `checks`. Response is **not** wrapped in `ApiResponseModifier` format."
+          }
+        },
+        {
+          "name": "Login required (GET)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/login",
+            "description": "Sanctum unauthenticated fallback route. Returns **401** JSON when the framework redirects to login (e.g. missing Bearer token on protected routes)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth (public)",
+      "description": "Registration, login, password reset. No Bearer token.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jane Doe\",\n  \"email\": \"jane@example.com\",\n  \"password\": \"password12\",\n  \"password_confirmation\": \"password12\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/register",
+            "description": "Creates a user. Name: letters/spaces only, 3–50 chars. Password: 8–20 chars, must match `password_confirmation`. New users may receive signup bonus credits per `config/billing.php`."
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"jane@example.com\",\n  \"password\": \"password12\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/login",
+            "description": "Returns `response.auth_token` (Sanctum plain text token) and `response.user`. Copy the token into collection variable `auth_token` for protected requests."
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"jane@example.com\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/forgot-password",
+            "description": "Email must **exist** in `users` (otherwise **422**). Sends reset mail with raw token for use with **Reset password**."
+          }
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"jane@example.com\",\n  \"token\": \"<token_from_email>\",\n  \"password\": \"newpass123\",\n  \"password_confirmation\": \"newpass123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/reset-password",
+            "description": "Token expires after 60 minutes. On success, invalidates all existing Sanctum tokens for that user."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Location codes (public)",
+      "description": "DataForSEO-style location codes for geo targeting. Cached; optional query filters on list.",
+      "item": [
+        {
+          "name": "List location codes",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/location-codes?per_page=50&sort_by=location_name&sort_order=asc",
+            "description": "Query params: `type`, `country_iso_code`, `countries_only` (bool), `search` (name like), `sort_by`, `sort_order`, `per_page` (max 500). Returns paginated `location_codes`."
+          }
+        },
+        {
+          "name": "List countries only",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/location-codes/countries",
+            "description": "All country-type locations, ordered by name."
+          }
+        },
+        {
+          "name": "Get location by code",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/location-codes/2840",
+            "description": "Path parameter is numeric `location_code` (e.g. 2840). **404** if not found."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing — webhook (Stripe)",
+      "description": "Not for manual API testing without a valid Stripe-Signature.",
+      "item": [
+        {
+          "name": "Stripe webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Stripe-Signature", "value": "<from_stripe>" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/billing/webhook",
+            "description": "Handled by `StripeWebhookController`. Verifies Stripe signature. Configure endpoint in Stripe Dashboard; do not use from Postman in production."
+          }
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "description": "Authenticated user profile. **Bearer token required.**",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Current user",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/user",
+            "description": "Returns the raw `User` model JSON (Laravel default), not the `ApiResponseModifier` envelope."
+          }
+        },
+        {
+          "name": "Update profile / password",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jane Smith\",\n  \"email\": \"jane.smith@example.com\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/user/profile",
+            "description": "Send any combination of profile fields (`name`, `email`) and/or password change (`current_password`, `password`, `password_confirmation`). At least one group required. Returns updated `user` in `response`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — billable features",
+      "description": "CRUD-style management of the `features` table (credit cost, name, active flag). **Bearer token must belong to a user with `is_admin = true`.** Non-admins get **403**. Responses are plain JSON (not `ApiResponseModifier`). **No DELETE** — features cannot be removed via API. Set `admin_feature_id` from **List features** before **Update feature**.\n\nSee `docs/ADMIN_API_INTEGRATION.md`.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List features",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/features",
+            "description": "**200** — `{ \"data\": [ { id, key, name, credit_cost, is_active, created_at, updated_at }, ... ] }` ordered by `key`. No pagination wrapper."
+          }
+        },
+        {
+          "name": "Create feature",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key\": \"my_new_feature\",\n  \"name\": \"My New Feature\",\n  \"credit_cost\": 10,\n  \"is_active\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/admin/features",
+            "description": "`key` required: lowercase snake `^[a-z][a-z0-9_]*$`, unique. `name`, `credit_cost` (0–999999) required. `is_active` optional (default true). **201** returns a single feature object. **422** if key invalid or duplicate."
+          }
+        },
+        {
+          "name": "Update feature",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credit_cost\": 12,\n  \"is_active\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/admin/features/{{admin_feature_id}}",
+            "description": "At least one of `name`, `credit_cost`, `is_active` required (`key` cannot be changed). **200** returns updated feature. **404** unknown id. **422** if body empty."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Citations",
+      "description": "AI citation visibility checks for a URL. **Bearer required.** Throttle **20/min**. `POST /analyze` uses **credit.deduct**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Analyze (start task)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/page\",\n  \"num_queries\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/citations/analyze",
+            "description": "Body: `url` (required, max 2048), `num_queries` optional (min 10, max from `config/citations.max_queries`, default from config). **202** with `task_id`, `status_url`, `results_url`."
+          }
+        },
+        {
+          "name": "Task status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/citations/status/{{citation_task_id}}",
+            "description": "Poll progress. Task must belong to authenticated user."
+          }
+        },
+        {
+          "name": "Task results",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/citations/results/{{citation_task_id}}",
+            "description": "Full citation results per query (GPT/Gemini), scores, competitors. Ownership enforced."
+          }
+        },
+        {
+          "name": "Retry missing queries",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/citations/retry/{{citation_task_id}}",
+            "description": "Dispatches partial chunks for queries missing from `results.by_query`. **400** if nothing to retry."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Keyword research",
+      "description": "Async keyword research jobs. **Bearer required.** Throttle **10/min**. `POST /` uses **credit.deduct**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Create job",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"best running shoes\",\n  \"project_id\": null,\n  \"language_code\": \"en\",\n  \"geo_target_id\": 2840,\n  \"max_keywords\": 500,\n  \"enable_google_planner\": true,\n  \"enable_scraper\": true,\n  \"enable_clustering\": true,\n  \"enable_intent_scoring\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/keyword-research",
+            "description": "`query` required. Defaults: `language_code` en, `geo_target_id` 2840, feature flags true. `project_id` must belong to current user if set. **201** on create; duplicate job may reverse credit reservation."
+          }
+        },
+        {
+          "name": "List jobs",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-research",
+            "description": "Lists the authenticated user's keyword research jobs (service-defined shape)."
+          }
+        },
+        {
+          "name": "Job status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-research/{{keyword_research_id}}/status",
+            "description": "Poll job status by numeric `id`."
+          }
+        },
+        {
+          "name": "Job results",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-research/{{keyword_research_id}}/results",
+            "description": "Fetch completed research payload when ready."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Keyword clusters",
+      "description": "Hierarchical keyword clustering via external engine. **Bearer required.** Throttle **15/min**. Credits reserved in controller (not `credit.deduct` middleware). May return **402** JSON for insufficient credits.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Create or fetch cluster",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keyword\": \"content marketing\",\n  \"language_code\": \"en\",\n  \"location_code\": 2840\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/keyword-clusters",
+            "description": "`keyword` required. Defaults: `language_code` en, `location_code` 2840. Responses: **200** cache hit (tree in `payload`), **202** async job (`job_id`, poll URLs), **503** if lock busy."
+          }
+        },
+        {
+          "name": "Job status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-clusters/{{cluster_job_id}}/status",
+            "description": "Numeric `id` only. Returns `status`, `snapshot_id`, error fields."
+          }
+        },
+        {
+          "name": "Job result",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-clusters/{{cluster_job_id}}/result",
+            "description": "**409** if not ready; **422** if job failed; **200** with `payload` (tree) when completed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Keyword planner",
+      "description": "Google Keyword Planner + DataForSEO + clustering helpers. **Bearer required.** Throttle **20/min**. Credit-backed routes use reservation completion.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Keyword ideas (GET)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/keyword-planner/ideas?keyword=seo%20tools",
+            "description": "Query: `keyword` (required). **credit.deduct**. Returns `{ status, count, data }` style JSON on success (not the standard ApiResponseModifier envelope)."
+          }
+        },
+        {
+          "name": "Informational keyword ideas",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keyword\": \"digital marketing\",\n  \"location_code\": 2840,\n  \"language_code\": \"en\",\n  \"limit\": 500,\n  \"top_n\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/keyword-planner/informational-ideas",
+            "description": "Either `keyword` OR `keywords` array required. Optional: `location_code`, `language_code`, `limit` (1–1000), `top_n` (1–100). **credit.deduct**."
+          }
+        },
+        {
+          "name": "Keywords for site",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"example.com\",\n  \"location_code\": 2840,\n  \"language_code\": \"en\",\n  \"search_partners\": true,\n  \"date_from\": null,\n  \"date_to\": null,\n  \"include_serp_info\": false,\n  \"tag\": null,\n  \"limit\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/keyword-planner/for-site",
+            "description": "`target` required (domain/site string). Defaults: location 2840, language en, `search_partners` true. **credit.deduct**."
+          }
+        },
+        {
+          "name": "Combined keywords + clusters",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"example.com\",\n  \"location_code\": 2840,\n  \"language_code\": \"en\",\n  \"limit\": 200,\n  \"enable_clustering\": true,\n  \"num_clusters\": 10\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/keyword-planner/combined-with-clusters",
+            "description": "`target` required. `enable_clustering` defaults true; `num_clusters` 2–50 or auto-derived. **credit.deduct**."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SEO — DataForSEO",
+      "description": "Direct DataForSEO-backed keyword and backlink APIs. **Bearer required.** Throttle **60/min** on group. Backlink **submit** uses **credit.deduct**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Keywords search volume",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keywords\": [\"seo\", \"sem\"],\n  \"language_code\": \"en\",\n  \"location_code\": 2840\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/keywords/search-volume",
+            "description": "`keywords` array required (1–100 items, each max 255 chars). Optional `language_code` (2 chars), `location_code`."
+          }
+        },
+        {
+          "name": "Keywords for site",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"example.com\",\n  \"location_code\": 2840,\n  \"language_code\": \"en\",\n  \"search_partners\": true,\n  \"date_from\": null,\n  \"date_to\": null,\n  \"include_serp_info\": false,\n  \"tag\": null,\n  \"limit\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/keywords/for-site",
+            "description": "Same body shape as planner keywords-for-site; uses `KeywordsForSiteRequest` with defaults location 2840, language en, `search_partners` true."
+          }
+        },
+        {
+          "name": "Backlinks — submit",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"https://example.com\",\n  \"limit\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/backlinks/submit",
+            "description": "`domain` must be a valid URL string. Optional `limit` 1–1000 (default from config). **credit.deduct**. Returns `task_id` and backlink payload when ready."
+          }
+        },
+        {
+          "name": "Backlinks — status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"{{backlinks_task_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/backlinks/status",
+            "description": "JSON body `task_id` required. Ownership enforced."
+          }
+        },
+        {
+          "name": "Backlinks — results",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"{{backlinks_task_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/backlinks/results",
+            "description": "JSON body `task_id` required. Full `results` payload."
+          }
+        },
+        {
+          "name": "Backlinks — harmful",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"https://example.com\",\n  \"risk_levels\": [\"high\", \"critical\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/seo/backlinks/harmful",
+            "description": "`domain` URL required. Optional `risk_levels` array: `low`, `medium`, `high`, `critical` (default high+critical)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SERP",
+      "description": "SERP keyword data and organic results. **Bearer required.** Throttle **60/min**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Keyword data",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keywords\": [\"buy shoes online\", \"running shoes\"],\n  \"language_code\": \"en\",\n  \"location_code\": 2840,\n  \"options\": {}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/serp/keywords",
+            "description": "`keywords`: 1–100 strings. Defaults: `language_code` en, `location_code` 2840. Optional `options` object passed to SERP service."
+          }
+        },
+        {
+          "name": "SERP results (single keyword)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keywords\": [\"best crm software\"],\n  \"language_code\": \"en\",\n  \"location_code\": 2840,\n  \"options\": {}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/serp/results",
+            "description": "**Exactly one** keyword in `keywords` array; **422** otherwise."
+          }
+        }
+      ]
+    },
+    {
+      "name": "FAQ",
+      "description": "FAQ generation from URL or topic. **Bearer required.** Throttle **30/min**. `generate` and `task` POST use **credit.deduct**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Generate (sync-style)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"https://example.com/page or topic text\",\n  \"options\": {\n    \"temperature\": 0.7\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/faq/generate",
+            "description": "`input` required, max 2048 chars. Optional `options.temperature` 0–1."
+          }
+        },
+        {
+          "name": "Create async task",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"https://example.com\",\n  \"options\": {}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/faq/task",
+            "description": "Returns `task_id` and initial `status`. Poll GET task status."
+          }
+        },
+        {
+          "name": "Task status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/faq/task/{{faq_task_id}}",
+            "description": "Progressive FAQ questions/answers (SERP + PAA), max 10 questions in response. Ownership enforced."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Page analysis",
+      "description": "Meta optimization, semantic scoring, content outlines via page-analysis services. **Bearer required.** Throttle **30/min**. POST endpoints use **credit.deduct** (with cache-aware completion where implemented).",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Meta optimize",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/blog/post\",\n  \"keyword\": \"optional focus keyword\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/page-analysis/meta-optimize",
+            "description": "`url` required (valid URL, max 2048). `keyword` optional."
+          }
+        },
+        {
+          "name": "Meta optimize — history",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/page-analysis/meta-optimize/history?per_page=20",
+            "description": "Paginated meta analyses for current user."
+          }
+        },
+        {
+          "name": "Semantic score",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/page\",\n  \"keyword\": \"optional\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/page-analysis/semantic-score",
+            "description": "Evaluates page vs keyword semantics via external service."
+          }
+        },
+        {
+          "name": "Semantic score — history",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/page-analysis/semantic-score/history?per_page=20",
+            "description": "Paginated semantic analyses."
+          }
+        },
+        {
+          "name": "Content outline",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"keyword\": \"email marketing tips\",\n  \"tone\": \"professional\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/page-analysis/content-outline",
+            "description": "`keyword` required. `tone` optional: professional, casual, academic, persuasive, informative (default professional)."
+          }
+        },
+        {
+          "name": "Content outline — history",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/page-analysis/content-outline/history?per_page=20",
+            "description": "Paginated content outlines."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing (authenticated)",
+      "description": "Credit wallet, Stripe checkout, and feature pricing. **Bearer required.** (Webhook is under separate folder.)",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Balance",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/billing/balance",
+            "description": "Returns `credits_balance` in `response`."
+          }
+        },
+        {
+          "name": "Transactions",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/billing/transactions?per_page=20&page=1&type=usage",
+            "description": "Query: `per_page` (max 100), `page`, `type` optional: purchase, usage, refund, bonus, adjustment."
+          }
+        },
+        {
+          "name": "Features",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/billing/features",
+            "description": "**Active** billable features with `credit_cost` (customer-facing). For admin list/create/update (all rows, including inactive) use folder **Admin — billable features**."
+          }
+        },
+        {
+          "name": "Purchase rules",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/billing/purchase-rules",
+            "description": "Min/max credits, increment, cents per credit from config."
+          }
+        },
+        {
+          "name": "Create checkout session",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credits\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/billing/checkout",
+            "description": "`credits` must satisfy min, max, and increment from purchase rules (defaults often min 100, step 10). Returns `checkout_url` and `session_id`."
+          }
+        },
+        {
+          "name": "Confirm checkout session",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"cs_test_...\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/billing/confirm-session",
+            "description": "Idempotent: applies credits from a paid Stripe Checkout session if not already credited. Validates session belongs to current user."
+          }
+        }
+      ]
+    }
+  ]
+}
