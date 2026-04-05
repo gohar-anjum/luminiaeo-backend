@@ -2,8 +2,8 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Seeder;
 use App\Domain\Billing\Models\Feature;
+use Illuminate\Database\Seeder;
 
 class FeatureSeeder extends Seeder
 {
@@ -42,7 +42,7 @@ class FeatureSeeder extends Seeder
             ],
             [
                 'key' => 'keyword_clustering',
-                'name' => 'Keyword Clustering',
+                'name' => 'Keyword cluster tree',
                 'credit_cost' => 4,
             ],
             [

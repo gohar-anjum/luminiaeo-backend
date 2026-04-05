@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -10,7 +11,9 @@ class UserFactory extends Factory
 {
     protected static ?string $password;
 
-     *
+    /**
+     * @return array<string, mixed>
+     */
     public function definition(): array
     {
         return [
@@ -27,5 +30,12 @@ class UserFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
         ]);
+    }
+
+    public function admin(): static
+    {
+        return $this->afterCreating(function (User $user): void {
+            $user->forceFill(['is_admin' => true])->save();
+        });
     }
 }
