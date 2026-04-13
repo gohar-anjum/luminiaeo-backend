@@ -38,6 +38,13 @@ services:
       timeout: 5s
       retries: 5
 
+  # Shared Python base (bullseye + pinned numpy + common deps) — build before Python microservices
+  base-python:
+    build:
+      context: ./base-python
+      dockerfile: Dockerfile
+    image: luminiaeo-base-python
+
   # Laravel Application (PHP-FPM)
   app:
     build:
@@ -163,6 +170,9 @@ services:
       dockerfile: Dockerfile
     container_name: luminiaeo_clustering
     restart: unless-stopped
+    depends_on:
+      - base-python
+      - redis
     ports:
       - "${CLUSTERING_PORT:-8001}:8001"
     volumes:
@@ -191,6 +201,8 @@ services:
       context: ./keyword-clustering-service
       dockerfile: Dockerfile
     container_name: luminiaeo_clustering_train
+    depends_on:
+      - base-python
     volumes:
       - ./keyword-clustering-service/models:/app/models
       - ./storage/app:/app/data
@@ -211,6 +223,8 @@ services:
       dockerfile: Dockerfile
     container_name: luminiaeo_keyword_intent
     restart: unless-stopped
+    depends_on:
+      - base-python
     ports:
       - "${KEYWORD_INTENT_PORT:-8003}:8002"
     networks:
@@ -236,6 +250,7 @@ services:
     networks:
       - luminiaeo-network
     depends_on:
+      - base-python
       - redis
     env_file:
       - .env
@@ -267,6 +282,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
+      - base-python
       - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]

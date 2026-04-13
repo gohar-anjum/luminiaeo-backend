@@ -1,11 +1,6 @@
-fastapi
-uvicorn[standard]
-httpx
+numpy>=1.24.0,<1.25.0
 beautifulsoup4
 sentence-transformers
 keybert
-redis
-python-dotenv
-pydantic
 scikit-learn
 prometheus-fastapi-instrumentator
