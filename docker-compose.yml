@@ -1,7 +1,7 @@
 services:
   # MySQL Database
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.28
     container_name: luminiaeo_mysql
     restart: unless-stopped
     environment:
@@ -23,7 +23,7 @@ services:
 
   # Redis
   redis:
-    image: redis:7-alpine
+    image: redis:6-alpine
     container_name: luminiaeo_redis
     restart: unless-stopped
     ports:
@@ -168,6 +168,7 @@ services:
     volumes:
       - ./keyword-clustering-service/models:/app/models
       - ./storage/app:/app/data
+      - huggingface_cache:/root/.cache/huggingface   # ← ADD THIS LINE
     networks:
       - luminiaeo-network
     env_file:
@@ -230,6 +231,8 @@ services:
     restart: unless-stopped
     ports:
       - "${PAGE_ANALYSIS_PORT:-8004}:8004"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
     networks:
       - luminiaeo-network
     depends_on:
@@ -273,7 +276,7 @@ services:
 
   # phpMyAdmin
   phpmyadmin:
-    image: phpmyadmin/phpmyadmin:latest
+    image: phpmyadmin/phpmyadmin:5.2.0
     container_name: luminiaeo_phpmyadmin
     restart: unless-stopped
     ports:
@@ -295,7 +298,8 @@ volumes:
     driver: local
   redis_data:
     driver: local
-
+  huggingface_cache:        # ← ADD THIS
+    driver: local
 networks:
   luminiaeo-network:
     driver: bridge
