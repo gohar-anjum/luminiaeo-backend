@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 
+from app.core.config import sanitize_plain_text
 from app.core.pipeline_log import log_step
-from app.core.text_sanitize import sanitize_plain_text
 
 
 def extract_content(html: str):

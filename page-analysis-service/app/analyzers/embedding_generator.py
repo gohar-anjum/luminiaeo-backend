@@ -3,10 +3,9 @@ Embedding generator with text size guardrail.
 Limits processed text to ~7000 tokens to prevent embedding explosion.
 all-MiniLM-L6-v2 uses ~256 tokens per 1000 chars; ~4 chars per token.
 """
-from app.core.config import settings
+from app.core.config import sanitize_plain_text, settings
 from app.core.models import get_embedding_model
 from app.core.pipeline_log import log_step
-from app.core.text_sanitize import sanitize_plain_text
 
 # Approximate: 1 token ~= 4 chars for English
 CHARS_PER_TOKEN = 4

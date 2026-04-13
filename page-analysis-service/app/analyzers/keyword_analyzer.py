@@ -1,8 +1,8 @@
 import logging
 
+from app.core.config import sanitize_plain_text
 from app.core.models import get_keybert_model
 from app.core.pipeline_log import log_step
-from app.core.text_sanitize import sanitize_plain_text
 
 logger = logging.getLogger(__name__)
 

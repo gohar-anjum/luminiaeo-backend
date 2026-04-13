@@ -1,7 +1,19 @@
 import os
+import re
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def sanitize_plain_text(value: str | None) -> str:
+    """Strip NUL/C0 controls so HTML never confuses multimodal embedding stacks."""
+    if not value:
+        return ""
+    cleaned = value.replace("\x00", " ")
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", cleaned)
+    return re.sub(r"[ \t]+", " ", cleaned).strip()
+
 
 class Settings:
     REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
