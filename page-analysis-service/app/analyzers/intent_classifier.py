@@ -4,6 +4,8 @@ Classifies content as commercial, informational, or comparative.
 """
 import re
 
+from app.core.pipeline_log import log_step
+
 
 def classify_intent(text: str) -> str:
     """
@@ -26,6 +28,7 @@ def classify_intent(text: str) -> str:
     ]
     for pattern in comparative_patterns:
         if re.search(pattern, text_lower):
+            log_step("05_intent_inner", path="comparative", pattern=pattern)
             return "comparative"
 
     # Commercial: buy, pricing, purchase, shop, order, deal, discount
@@ -60,6 +63,8 @@ def classify_intent(text: str) -> str:
     ]
     for pattern in informational_patterns:
         if re.search(pattern, text_lower):
+            log_step("05_intent_inner", path="informational_matched", pattern=pattern)
             return "informational"
 
+    log_step("05_intent_inner", path="informational_default")
     return "informational"

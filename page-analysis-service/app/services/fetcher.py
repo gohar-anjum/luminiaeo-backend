@@ -1,8 +1,9 @@
 import httpx
 
 from app.core.config import settings
-from app.core.security import validate_public_url
 from app.core.http_client import get_http_client
+from app.core.pipeline_log import log_step
+from app.core.security import validate_public_url
 
 # Many sites block minimal or missing browser headers; some omit or mislabel Content-Type.
 HTML_REQUEST_HEADERS = {
@@ -33,11 +34,14 @@ def _body_looks_like_html(text: str) -> bool:
     sample = text.lstrip()[:4096].lower()
     if sample.startswith("<!doctype html") or sample.startswith("<html"):
         return True
-    return "<html" in sample[:1500]
+    if "<html" in sample:
+        return True
+    return any(tag in sample for tag in ("<head", "<body", "<article", "<main"))
 
 
 async def fetch_html(url: str) -> str:
     """Fetch HTML from URL using global connection pool."""
+    log_step("02_fetch_start", url=url)
     validate_public_url(url)
 
     client = await get_http_client()
@@ -45,22 +49,47 @@ async def fetch_html(url: str) -> str:
     try:
         response = await client.get(url, headers=HTML_REQUEST_HEADERS, follow_redirects=True)
     except httpx.TimeoutException:
+        log_step("02_fetch_fail", reason="timeout", url=url)
         raise ValueError("Timed out while fetching URL") from None
     except httpx.RequestError as e:
+        log_step("02_fetch_fail", reason="request_error", error=str(e), url=url)
         raise ValueError(f"Could not fetch URL: {e}") from None
 
+    ct = response.headers.get("content-type", "")
+    log_step(
+        "02_fetch_http",
+        status=response.status_code,
+        bytes=len(response.content),
+        content_type=_safe_ct(ct),
+        final_url=str(response.url),
+    )
+
     if response.status_code >= 400:
+        log_step("02_fetch_fail", reason="http_status", status=response.status_code)
         raise ValueError(f"URL returned HTTP {response.status_code}")
 
     if len(response.content) > settings.MAX_CONTENT_SIZE_MB * 1024 * 1024:
+        log_step("02_fetch_fail", reason="too_large", bytes=len(response.content))
         raise ValueError("Content too large")
 
     text = response.text
-    if not _declared_as_html(response.headers.get("content-type")) and not _body_looks_like_html(
-        text
-    ):
+    declared = _declared_as_html(ct)
+    sniff = _body_looks_like_html(text)
+    log_step(
+        "02_fetch_body_check",
+        declared_html=declared,
+        sniff_html=sniff,
+        text_chars=len(text),
+    )
+    if not declared and not sniff:
+        log_step("02_fetch_fail", reason="not_html", content_type=_safe_ct(ct))
         raise ValueError(
             "URL does not return HTML content (unexpected content-type or body)"
         )
 
+    log_step("02_fetch_done", text_chars=len(text))
     return text
+
+
+def _safe_ct(ct: str) -> str:
+    return (ct or "").split(";")[0].strip()[:80]
