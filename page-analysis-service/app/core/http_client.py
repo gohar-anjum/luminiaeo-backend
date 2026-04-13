@@ -14,7 +14,8 @@ async def get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         _http_client = httpx.AsyncClient(
             timeout=settings.REQUEST_TIMEOUT,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            # Smaller keep-alive pool reduces "server disconnected" from stale pooled sockets.
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=10),
         )
     return _http_client
 

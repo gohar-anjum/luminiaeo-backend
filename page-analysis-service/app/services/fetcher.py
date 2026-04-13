@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 
 from app.core.config import settings
@@ -39,6 +41,30 @@ def _body_looks_like_html(text: str) -> bool:
     return any(tag in sample for tag in ("<head", "<body", "<article", "<main"))
 
 
+_FETCH_RETRY_DELAYS_S = (0.25, 0.6, 1.2)
+_FETCH_MAX_ATTEMPTS = 4
+
+
+def _fetch_error_retryable(exc: httpx.RequestError) -> bool:
+    """Transient transport errors where a fresh attempt often succeeds."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    msg = str(exc).lower()
+    return any(
+        needle in msg
+        for needle in (
+            "disconnected",
+            "connection reset",
+            "broken pipe",
+            "eof occurred",
+            "eof in violation",
+            "connection aborted",
+            "unexpected_eof",
+            "server disconnected",
+        )
+    )
+
+
 async def fetch_html(url: str) -> str:
     """Fetch HTML from URL using global connection pool."""
     log_step("02_fetch_start", url=url)
@@ -46,14 +72,43 @@ async def fetch_html(url: str) -> str:
 
     client = await get_http_client()
 
-    try:
-        response = await client.get(url, headers=HTML_REQUEST_HEADERS, follow_redirects=True)
-    except httpx.TimeoutException:
-        log_step("02_fetch_fail", reason="timeout", url=url)
-        raise ValueError("Timed out while fetching URL") from None
-    except httpx.RequestError as e:
-        log_step("02_fetch_fail", reason="request_error", error=str(e), url=url)
-        raise ValueError(f"Could not fetch URL: {e}") from None
+    response: httpx.Response | None = None
+    for attempt in range(_FETCH_MAX_ATTEMPTS):
+        headers = dict(HTML_REQUEST_HEADERS)
+        if attempt > 0:
+            headers["Connection"] = "close"
+            log_step(
+                "02_fetch_retry",
+                attempt=attempt + 1,
+                max_attempts=_FETCH_MAX_ATTEMPTS,
+                url=url,
+            )
+
+        try:
+            response = await client.get(url, headers=headers, follow_redirects=True)
+            break
+        except httpx.RequestError as e:
+            can_retry = attempt < _FETCH_MAX_ATTEMPTS - 1 and _fetch_error_retryable(e)
+            if can_retry:
+                delay = _FETCH_RETRY_DELAYS_S[
+                    min(attempt, len(_FETCH_RETRY_DELAYS_S) - 1)
+                ]
+                log_step(
+                    "02_fetch_retry_wait",
+                    error_type=type(e).__name__,
+                    delay_s=delay,
+                    detail=str(e)[:160],
+                )
+                await asyncio.sleep(delay)
+                continue
+            if isinstance(e, httpx.TimeoutException):
+                log_step("02_fetch_fail", reason="timeout", url=url)
+                raise ValueError("Timed out while fetching URL") from e
+            log_step("02_fetch_fail", reason="request_error", error=str(e), url=url)
+            raise ValueError(f"Could not fetch URL: {e}") from e
+
+    if response is None:
+        raise ValueError("Could not fetch URL: no response after retries")
 
     ct = response.headers.get("content-type", "")
     log_step(
