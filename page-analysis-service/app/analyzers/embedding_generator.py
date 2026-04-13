@@ -6,6 +6,7 @@ all-MiniLM-L6-v2 uses ~256 tokens per 1000 chars; ~4 chars per token.
 from app.core.config import settings
 from app.core.models import get_embedding_model
 from app.core.pipeline_log import log_step
+from app.core.text_sanitize import sanitize_plain_text
 
 # Approximate: 1 token ~= 4 chars for English
 CHARS_PER_TOKEN = 4
@@ -23,7 +24,8 @@ def truncate_for_embedding(text: str) -> str:
 
 def generate_embedding(text: str, *, log_label: str | None = None) -> list[float]:
     """Generate embedding for text, with size guardrail."""
-    empty_source = not (text or "").strip()
+    text = sanitize_plain_text(text or "")
+    empty_source = not text.strip()
     truncated = truncate_for_embedding(text).strip()
     if not truncated:
         truncated = "."
@@ -35,4 +37,10 @@ def generate_embedding(text: str, *, log_label: str | None = None) -> list[float
             empty_source=empty_source,
         )
     model = get_embedding_model()
-    return model.encode(truncated).tolist()
+    # List input avoids some multimodal auto-routing edge cases in sentence-transformers 4+.
+    emb = model.encode(
+        [truncated],
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    return emb[0].tolist()

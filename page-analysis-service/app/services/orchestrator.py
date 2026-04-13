@@ -6,6 +6,7 @@ import logging
 import time
 
 from app.analyzers.embedding_generator import generate_embedding
+from app.analyzers.fallback_keywords import merge_keywords_with_fallback
 from app.analyzers.intent_classifier import classify_intent
 from app.analyzers.keyword_analyzer import extract_keywords
 from app.analyzers.semantic_scorer import compute_similarity
@@ -56,6 +57,18 @@ async def analyze_page(request) -> dict:
             content["text"],
             content["headings"],
         )
+        kb_count = len(analysis_result.get("keywords") or [])
+        if "semantic_score" in request.analysis:
+            analysis_result["keywords"] = merge_keywords_with_fallback(
+                analysis_result["keywords"],
+                content,
+                max_phrases=10,
+            )
+            log_step(
+                "04_keywords_merged_fallback",
+                keybert_count=kb_count,
+                merged_count=len(analysis_result["keywords"]),
+            )
         log_step(
             "04_keywords_phase_done",
             count=len(analysis_result.get("keywords") or []),
@@ -81,6 +94,11 @@ async def analyze_page(request) -> dict:
                 analysis_result["keywords"] = extract_keywords(
                     content["text"],
                     content["headings"],
+                )
+                analysis_result["keywords"] = merge_keywords_with_fallback(
+                    analysis_result["keywords"],
+                    content,
+                    max_phrases=10,
                 )
 
             keywords = analysis_result["keywords"] or []

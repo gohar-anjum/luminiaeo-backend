@@ -2,6 +2,7 @@ import logging
 
 from app.core.models import get_keybert_model
 from app.core.pipeline_log import log_step
+from app.core.text_sanitize import sanitize_plain_text
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,8 @@ def extract_keywords(text: str, headings: list) -> list[dict]:
         headings_count=len(headings or []),
     )
     kw_model = get_keybert_model()
+    text = sanitize_plain_text(text or "")
+    headings = [h for h in (sanitize_plain_text(h) for h in (headings or [])) if h]
     weighted_text = (text + " " + " ".join(headings * 2)).strip()
     if not weighted_text:
         log_step("04_keybert_inner_skip", reason="empty_weighted_text")
