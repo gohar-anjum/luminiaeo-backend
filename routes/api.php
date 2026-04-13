@@ -177,7 +177,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 ->name('faq.task.status');
         });
 
-        Route::prefix('page-analysis')->middleware('throttle:30,1')->group(function () {
+        Route::prefix('page-analysis')->group(function () {
             Route::post('/meta-optimize', [\App\Http\Controllers\Api\PageAnalysis\MetaOptimizerController::class, 'optimize'])
                 ->middleware('credit.deduct')
                 ->name('page-analysis.meta-optimize');

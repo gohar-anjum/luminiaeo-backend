@@ -16,34 +16,6 @@ class MetaOptimizerService
     public function handle(string $url, ?string $keyword = null): array
     {
         $userId = auth()->id();
-        $cooldownSeconds = (int) config('services.page_analysis.cache_ttl', 86400);
-
-        $query = MetaAnalysis::where('user_id', $userId)
-            ->where('url', $url)
-            ->where('analyzed_at', '>=', now()->subSeconds($cooldownSeconds))
-            ->latest('analyzed_at');
-
-        if ($keyword) {
-            $query->where('target_keyword', $keyword);
-        } else {
-            $query->whereNull('target_keyword');
-        }
-
-        $recent = $query->first();
-
-        if ($recent) {
-            return [
-                'title' => $recent->suggested_title,
-                'description' => $recent->suggested_description,
-                'suggestions' => $recent->suggestions ?? [],
-                'from_cache' => true,
-                'analyzed_at' => $recent->analyzed_at->toIso8601String(),
-                'primary_keyword' => $recent->target_keyword ?: $this->resolvePrimaryKeyword($recent->keywords ?? []),
-                'intent' => $recent->intent,
-                'original_title' => $recent->original_title,
-                'original_description' => $recent->original_description,
-            ];
-        }
 
         try {
             $payload = [

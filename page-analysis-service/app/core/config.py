@@ -8,6 +8,6 @@ class Settings:
     REQUEST_TIMEOUT = 15
     MAX_CONTENT_SIZE_MB = 5
     CACHE_TTL = int(os.getenv("CACHE_TTL", 86400))  # 24 hours
-    MAX_TOKENS = 10000  # Limit text for embedding to prevent explosion
+    MAX_TOKENS = 100000  # Limit text for embedding to prevent explosion
 
 settings = Settings()

@@ -135,7 +135,8 @@ return [
     'page_analysis' => [
         'url' => env('PAGE_ANALYSIS_SERVICE_URL', 'http://localhost:8004'),
         'timeout' => (int) env('PAGE_ANALYSIS_TIMEOUT', 15),
-        'cache_ttl' => (int) env('PAGE_ANALYSIS_CACHE_TTL', 86400), // 24 hours
+        // Redis TTL for the Python page-analysis microservice (see docker-compose CACHE_TTL).
+        'cache_ttl' => (int) env('PAGE_ANALYSIS_CACHE_TTL', 86400),
     ],
 
 ];

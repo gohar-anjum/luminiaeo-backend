@@ -22,26 +22,6 @@ class ContentOutlineService
     public function generate(string $keyword, string $tone = 'professional'): array
     {
         $userId = auth()->id();
-        $cooldownSeconds = (int) config('services.page_analysis.cache_ttl', 86400);
-
-        $recent = ContentOutline::where('user_id', $userId)
-            ->where('keyword', $keyword)
-            ->where('tone', $tone)
-            ->where('generated_at', '>=', now()->subSeconds($cooldownSeconds))
-            ->latest('generated_at')
-            ->first();
-
-        if ($recent) {
-            return [
-                'outline' => $recent->outline,
-                'semantic_keywords' => $recent->semantic_keywords ?? [],
-                'intent' => $recent->intent,
-                'keyword' => $recent->keyword,
-                'tone' => $recent->tone,
-                'from_cache' => true,
-                'generated_at' => $recent->generated_at->toIso8601String(),
-            ];
-        }
 
         $generated = $this->callAi($keyword, $tone);
 

@@ -1,15 +1,31 @@
 """
 SSRF protection: block private/internal URLs and dangerous schemes.
 """
-import socket
 import ipaddress
+import socket
 from urllib.parse import urlparse
 
 
 ALLOWED_SCHEMES = ("http", "https")
 BLOCKED_HOSTNAMES = frozenset(
-    {"localhost", "127.0.0.1", "0.0.0.0", "::1", "metadata.google.internal"}
+    {
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "metadata.google.internal",
+    }
 )
+
+
+def _ip_not_allowed(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return bool(
+        ip_obj.is_private
+        or ip_obj.is_loopback
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+    )
 
 
 def validate_public_url(url: str) -> None:
@@ -31,14 +47,21 @@ def validate_public_url(url: str) -> None:
         raise ValueError("Private/internal URLs are not allowed")
 
     try:
-        ip = socket.gethostbyname(hostname)
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
+        raise ValueError("Could not resolve hostname") from None
+
+    unique_ips: set[str] = set()
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        unique_ips.add(sockaddr[0])
+
+    if not unique_ips:
         raise ValueError("Could not resolve hostname")
 
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-    except ValueError:
-        raise ValueError("Invalid IP address")
-
-    if ip_obj.is_private or ip_obj.is_loopback:
-        raise ValueError("Private/internal URLs are not allowed")
+    for ip_str in unique_ips:
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            raise ValueError("Invalid IP address") from None
+        if _ip_not_allowed(ip_obj):
+            raise ValueError("Private/internal URLs are not allowed")
