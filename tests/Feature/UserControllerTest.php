@@ -10,22 +10,22 @@ class UserControllerTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_get_user_profile_requires_authentication(): void
+    public function test_get_user_requires_authentication(): void
     {
-        $response = $this->getJson('/api/user/profile');
+        $response = $this->getJson('/api/user');
 
         $response->assertStatus(401);
     }
 
-    public function test_get_user_profile_returns_user_data(): void
+    public function test_get_user_returns_user_data(): void
     {
         $user = User::factory()->create();
 
         $response = $this->actingAs($user, 'sanctum')
-            ->getJson('/api/user/profile');
+            ->getJson('/api/user');
 
         $response->assertStatus(200)
-            ->assertJsonStructure(['status', 'data' => ['id', 'name', 'email']]);
+            ->assertJsonStructure(['id', 'name', 'email']);
     }
 
     public function test_update_user_profile_requires_authentication(): void
@@ -52,4 +52,3 @@ class UserControllerTest extends TestCase
         $this->assertEquals('Updated Name', $user->name);
     }
 }
-

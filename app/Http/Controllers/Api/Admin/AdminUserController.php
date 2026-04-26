@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\AdjustCreditsRequest;
+use App\Http\Requests\Admin\AdminStoreUserRequest;
 use App\Models\User;
 use App\Services\Admin\AdminProductActivityService;
 use App\Services\Admin\AdminUserService;
@@ -12,6 +13,18 @@ use Illuminate\Http\Request;
 
 class AdminUserController extends Controller
 {
+    public function store(AdminStoreUserRequest $request, AdminUserService $users): JsonResponse
+    {
+        $validated = $request->validated();
+        $user = $users->createCustomerUser(
+            $validated['name'],
+            $validated['email'],
+            $validated['password'],
+        );
+
+        return response()->json($users->serializeUser($user), 201);
+    }
+
     public function index(Request $request, AdminUserService $users): JsonResponse
     {
         $validated = $request->validate([

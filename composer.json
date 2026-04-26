@@ -10,6 +10,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "google/apiclient": "^2.15",
         "googleads/google-ads-php": "^31.1",
         "laravel/cashier": "^16.2",
         "laravel/framework": "^12.0",

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\Admin\AdminApiLogController;
 use App\Http\Controllers\Api\Admin\AdminBacklinkController;
 use App\Http\Controllers\Api\Admin\AdminClusterController;
+use App\Http\Controllers\Api\Admin\AdminContactSubmissionController;
 use App\Http\Controllers\Api\Admin\AdminCreditTransactionController;
 use App\Http\Controllers\Api\Admin\AdminDashboardController;
 use App\Http\Controllers\Api\Admin\AdminFeatureController;
@@ -12,8 +13,11 @@ use App\Http\Controllers\Api\Admin\AdminSystemController;
 use App\Http\Controllers\Api\Admin\AdminUserController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CitationController;
+use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\DataForSEO\BacklinksController;
 use App\Http\Controllers\Api\DataForSEO\DataForSEOController;
+use App\Http\Controllers\Api\EmailVerificationController;
+use App\Http\Controllers\Api\GoogleAuthController;
 use App\Http\Controllers\Api\KeywordPlannerController;
 use App\Http\Controllers\Api\LocationCodeController;
 use App\Http\Controllers\Api\UserController;
@@ -28,8 +32,15 @@ Route::get('/login', function () {
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
+Route::post('/auth/google', [GoogleAuthController::class, 'idTokenLogin']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->name('password.forgot');
 Route::post('/reset-password', [AuthController::class, 'resetPassword'])->name('password.reset');
+
+Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
+    ->middleware(['signed', 'throttle:6,1'])
+    ->name('verification.verify');
+
+Route::post('/contact', [ContactController::class, 'store'])->middleware('throttle:5,1');
 
 Route::get('/health', [\App\Http\Controllers\Api\HealthController::class, 'check'])->name('health.check');
 
@@ -48,6 +59,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard/stats', [AdminDashboardController::class, 'stats'])->name('admin.dashboard.stats');
         Route::get('/dashboard/charts', [AdminDashboardController::class, 'charts'])->name('admin.dashboard.charts');
 
+        Route::post('/users', [AdminUserController::class, 'store'])->name('admin.users.store');
         Route::get('/users', [AdminUserController::class, 'index'])->name('admin.users.index');
         Route::get('/users/{id}', [AdminUserController::class, 'show'])->whereNumber('id')->name('admin.users.show');
         Route::post('/users/{id}/suspend', [AdminUserController::class, 'suspend'])->whereNumber('id')->name('admin.users.suspend');
@@ -89,12 +101,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/cache/clear', [AdminSystemController::class, 'clearCache'])->name('admin.cache.clear');
         Route::get('/system/health', [AdminSystemController::class, 'health'])->name('admin.system.health');
         Route::post('/announcements', [AdminSystemController::class, 'storeAnnouncement'])->name('admin.announcements.store');
+
+        Route::get('/contact-submissions', [AdminContactSubmissionController::class, 'index'])->name('admin.contact-submissions.index');
+        Route::get('/contact-submissions/{id}', [AdminContactSubmissionController::class, 'show'])->whereNumber('id')->name('admin.contact-submissions.show');
     });
 
-    Route::middleware('not_suspended')->group(function () {
+    Route::middleware(['not_suspended', 'email_verified_unless'])->group(function () {
         Route::get('/user', function (Request $request) {
             return $request->user();
-        });
+        })->name('user.current');
+
+        Route::post('/logout', [AuthController::class, 'logout'])->name('user.logout');
+        Route::post('/email/verification-notification', [AuthController::class, 'resendVerificationEmail'])
+            ->middleware('throttle:6,1')
+            ->name('verification.send');
 
         Route::put('/user/profile', [UserController::class, 'updateProfile'])->name('user.profile.update');
 

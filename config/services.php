@@ -31,6 +31,10 @@ return [
         'redirect_uri' => env('GOOGLE_ADS_REDIRECT_URI'),
     ],
 
+    'google_oauth' => [
+        'client_id' => env('GOOGLE_OAUTH_CLIENT_ID'),
+    ],
+
     'dataforseo' => [
         'base_url' => env('DATAFORSEO_BASE_URL', 'https://api.dataforseo.com/v3'),
         'login' => env('DATAFORSEO_LOGIN'),

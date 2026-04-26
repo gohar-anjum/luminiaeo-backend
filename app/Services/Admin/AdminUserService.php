@@ -60,8 +60,28 @@ class AdminUserService
             'is_admin' => (bool) $user->is_admin,
             'suspended_at' => Iso8601::utcZ($user->suspended_at),
             'credits_balance' => (int) $user->credits_balance,
+            'email_verified_at' => Iso8601::utcZ($user->email_verified_at),
             'created_at' => Iso8601::utcZ($user->created_at),
         ];
+    }
+
+    public function createCustomerUser(string $name, string $email, string $password): User
+    {
+        $user = User::query()->create([
+            'name' => $name,
+            'email' => $email,
+            'password' => $password,
+            'is_admin' => false,
+            'email_verified_at' => now(),
+        ]);
+        $signupBonus = (int) config('billing.signup_bonus_credits', 10);
+        if ($signupBonus > 0) {
+            $this->walletService->addCredits($user, $signupBonus, 'bonus', [
+                'metadata' => ['reason' => 'signup_bonus', 'source' => 'admin_created'],
+            ]);
+        }
+
+        return $user->fresh();
     }
 
     public function suspend(User $user): void

@@ -2,20 +2,23 @@
 
 namespace App\Models;
 
+use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailMethods;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
-    use HasApiTokens, HasFactory ,Notifiable;
+    use HasApiTokens, HasFactory, MustVerifyEmailMethods, Notifiable;
 
     protected $fillable = [
         'name',
         'email',
         'password',
         'credits_balance',
+        'google_id',
     ];
 
     protected $hidden = [
@@ -54,5 +57,14 @@ class User extends Authenticatable
     public function apiRequestLogs(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(ApiRequestLog::class);
+    }
+
+    public function hasVerifiedEmail(): bool
+    {
+        if ($this->is_admin) {
+            return true;
+        }
+
+        return $this->email_verified_at !== null;
     }
 }

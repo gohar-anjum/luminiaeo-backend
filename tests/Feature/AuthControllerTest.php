@@ -21,7 +21,7 @@ class AuthControllerTest extends TestCase
         ]);
 
         $response->assertStatus(201)
-            ->assertJsonStructure(['status', 'message', 'data' => ['user', 'token']]);
+            ->assertJsonStructure(['status', 'message', 'response' => ['auth_token', 'user']]);
 
         $this->assertDatabaseHas('users', [
             'email' => 'test@example.com',
@@ -66,12 +66,12 @@ class AuthControllerTest extends TestCase
         ]);
 
         $response->assertStatus(200)
-            ->assertJsonStructure(['status', 'message', 'data' => ['user', 'token']]);
+            ->assertJsonStructure(['status', 'message', 'response' => ['auth_token', 'user']]);
     }
 
     public function test_login_rejects_invalid_credentials(): void
     {
-        $user = User::factory()->create([
+        User::factory()->create([
             'email' => 'test@example.com',
             'password' => Hash::make('password123'),
         ]);
@@ -102,4 +102,3 @@ class AuthControllerTest extends TestCase
             ->assertJsonStructure(['id', 'name', 'email']);
     }
 }
-

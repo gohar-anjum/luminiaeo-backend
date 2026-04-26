@@ -22,6 +22,10 @@ return [
 
     ],
 
+    'verification' => [
+        'expire' => (int) env('EMAIL_VERIFICATION_EXPIRE_MINUTES', 60),
+    ],
+
     'passwords' => [
         'users' => [
             'provider' => 'users',

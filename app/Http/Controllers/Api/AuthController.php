@@ -10,6 +10,7 @@ use App\Http\Requests\ResetPasswordRequest;
 use App\Mail\PasswordResetMail;
 use App\Models\User;
 use App\Services\ApiResponseModifier;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -39,7 +40,7 @@ class AuthController extends Controller
             }
             $token = $user->createToken('access-token');
 
-            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken, 'user' => $user])->response();
+            return $this->responseModifier->setData(['auth_token' => $token->plainTextToken, 'user' => $user->fresh()])->response();
         }
 
         return $this->responseModifier->setMessage('Invalid credentials')->setResponseCode(401)->response();
@@ -58,6 +59,7 @@ class AuthController extends Controller
             'email' => $validated['email'],
             'password' => $validated['password'],
         ]);
+        event(new Registered($user));
 
         $signupBonus = (int) config('billing.signup_bonus_credits', 10);
         if ($signupBonus > 0) {
@@ -66,7 +68,37 @@ class AuthController extends Controller
             ]);
         }
 
-        return $this->responseModifier->setMessage('User created successfully')->response();
+        $token = $user->createToken('access-token');
+
+        return $this->responseModifier
+            ->setMessage('Registration successful. We sent a link to your email. Please verify your address to use the app.')
+            ->setData(['auth_token' => $token->plainTextToken, 'user' => $user->fresh()])
+            ->setResponseCode(201)
+            ->response();
+    }
+
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return $this->responseModifier->setMessage('Logged out.')->response();
+    }
+
+    public function resendVerificationEmail(Request $request)
+    {
+        $user = $request->user();
+        if (! $user) {
+            return $this->responseModifier->setMessage('Unauthenticated.')->setResponseCode(401)->response();
+        }
+        if ($user->hasVerifiedEmail()) {
+            return $this->responseModifier->setMessage('Email is already verified.')->response();
+        }
+        if ($user->is_admin) {
+            return $this->responseModifier->setMessage('Email is already verified.')->response();
+        }
+        $user->sendEmailVerificationNotification();
+
+        return $this->responseModifier->setMessage('Verification link sent.')->response();
     }
 
     public function forgotPassword(ForgotPasswordRequest $request)

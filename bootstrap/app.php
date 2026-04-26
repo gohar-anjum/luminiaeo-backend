@@ -20,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'credit.deduct' => \App\Http\Middleware\DeductCreditsMiddleware::class,
             'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
             'not_suspended' => \App\Http\Middleware\EnsureUserNotSuspended::class,
+            'email_verified_unless' => \App\Http\Middleware\EnsureEmailVerifiedUnlessWhitelisted::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {})->create();
