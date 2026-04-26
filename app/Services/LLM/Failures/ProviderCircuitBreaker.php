@@ -2,27 +2,18 @@
 
 namespace App\Services\LLM\Failures;
 
-use Illuminate\Support\Facades\Cache;
-
+/**
+ * Previously tracked consecutive failures in cache and blocked a provider.
+ * This is a no-op: every request is attempted; use HTTP retry/timeouts and logging instead.
+ */
 class ProviderCircuitBreaker
 {
-    protected string $prefix = 'llm_provider_failures_';
+    public function recordFailure(string $provider): void {}
 
-    public function recordFailure(string $provider): void
-    {
-        $key = $this->prefix . $provider;
-
-        $failures = Cache::get($key, 0) + 1;
-        Cache::put($key, $failures, now()->addMinutes(15));
-    }
-
-    public function clearFailures(string $provider): void
-    {
-        Cache::forget($this->prefix . $provider);
-    }
+    public function clearFailures(string $provider): void {}
 
     public function isBlocked(string $provider): bool
     {
-        return Cache::get($this->prefix . $provider, 0) >= 3;
+        return false;
     }
 }

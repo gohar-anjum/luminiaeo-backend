@@ -77,6 +77,7 @@ class AdminUserController extends Controller
     public function unsuspend(int $id, AdminUserService $users): JsonResponse
     {
         $user = User::query()->findOrFail($id);
+        abort_if($user->is_admin, 403, 'Admin accounts cannot be managed through customer user endpoints.');
         $users->unsuspend($user);
 
         return response()->json($users->serializeUser($user->fresh()));
@@ -86,9 +87,18 @@ class AdminUserController extends Controller
     {
         $user = User::query()->findOrFail($id);
         abort_if($user->is_admin, 403, 'Admin accounts cannot be managed through customer user endpoints.');
-        $amount = (int) $request->validated('amount');
-        $users->adjustCredits($user, $amount, $request->user()?->id);
+        $data = $request->validated();
+        $amount = (int) $data['amount'];
+        $note = isset($data['note']) ? trim((string) $data['note']) : null;
+        if ($note === '') {
+            $note = null;
+        }
+        $transaction = $users->adjustCredits($user, $amount, $request->user()?->id, $note);
+        $user = $user->fresh();
 
-        return response()->json($users->serializeUser($user->fresh()));
+        return response()->json([
+            'user' => $users->serializeUser($user),
+            'transaction' => $users->serializeCreditTransaction($transaction),
+        ]);
     }
 }

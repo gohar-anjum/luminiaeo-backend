@@ -25,6 +25,8 @@ Evaluation rules per query:
 5. Confidence must reflect certainty that the target is cited and that any URLs you list exist. If you cannot verify URLs, set confidence to 0 and target_cited to false.
 
 User:
+You will receive JSON after this instruction. The **target_url** / **target_domain** identify the client site under test. For each **query**, decide whether that site (or a page you are certain exists on it) is a plausible or known **cited reference** for an answer to that query in your training knowledge. If you only know the domain is in a space but cannot name a real page URL, set **target_cited** false and leave **target_urls** empty—do not invent paths. Short, specific queries usually get more reliable answers than vague one-word keywords.
+
 You will receive JSON input with this schema:
 {
   "target_url": "{{ url }}",

@@ -2,12 +2,11 @@
 
 namespace Tests\Unit;
 
+use App\Services\LLM\Failures\ProviderCircuitBreaker;
 use App\Services\LLM\LLMClient;
 use App\Services\LLM\Prompt\PlaceholderReplacer;
 use App\Services\LLM\Prompt\PromptLoader;
-use App\Services\LLM\Support\JsonExtractor;
 use App\Services\LLM\Transformers\KeywordIntentParser;
-use App\Services\LLM\Failures\ProviderCircuitBreaker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
 use Tests\TestCase;
@@ -17,9 +16,13 @@ class LLMClientTest extends TestCase
     use RefreshDatabase;
 
     protected LLMClient $client;
+
     protected $mockPromptLoader;
+
     protected $mockPlaceholderReplacer;
+
     protected $mockCircuitBreaker;
+
     protected $mockKeywordParser;
 
     protected function setUp(): void
@@ -52,10 +55,6 @@ class LLMClientTest extends TestCase
             ->once()
             ->andReturn('Analyze: seo tools');
 
-        $this->mockCircuitBreaker->shouldReceive('canUseProvider')
-            ->once()
-            ->andReturn(true);
-
         $this->mockCircuitBreaker->shouldReceive('clearFailures')
             ->once();
 
@@ -78,4 +77,3 @@ class LLMClientTest extends TestCase
         parent::tearDown();
     }
 }
-

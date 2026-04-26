@@ -17,7 +17,6 @@ return [
         'timeout' => (int) env('CITATION_OPENAI_TIMEOUT', 60),
         'max_retries' => (int) env('CITATION_OPENAI_RETRIES', 3),
         'backoff_seconds' => (int) env('CITATION_OPENAI_BACKOFF', 2),
-        'circuit_breaker' => (int) env('CITATION_OPENAI_CIRCUIT_BREAKER', 5),
         'api_key' => env('OPENAI_API_KEY'),
         'base_url' => env('OPENAI_API_BASE_URL', 'https://api.openai.com/v1'),
     ],
@@ -27,7 +26,6 @@ return [
         'timeout' => (int) env('CITATION_GEMINI_TIMEOUT', 60),
         'max_retries' => (int) env('CITATION_GEMINI_RETRIES', 3),
         'backoff_seconds' => (int) env('CITATION_GEMINI_BACKOFF', 2),
-        'circuit_breaker' => (int) env('CITATION_GEMINI_CIRCUIT_BREAKER', 5),
     ],
     'stream' => [
         'retry_ms' => (int) env('CITATION_STREAM_RETRY_MS', 1000),

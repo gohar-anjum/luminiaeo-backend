@@ -65,7 +65,6 @@ class LLMClient
         $batchSize = max(50, config('citations.query_generation.max_per_call', 250));
 
         $template = $this->prompts->load('citation/query_generation');
-        $system = $template['system'] ?? '';
         $userTemplate = $template['user'] ?: "Target URL: {{ url }}\nRequested Queries: {{ N }}\nReturn a JSON array of unique search queries.";
 
         $collected = [];
@@ -75,11 +74,12 @@ class LLMClient
         while (count($collected) < $count && $attempts < $maxAttempts) {
             $remaining = $count - count($collected);
             $currentBatch = min($batchSize, $remaining);
-
-            $userPrompt = $this->replacer->replace($userTemplate, [
+            $replace = [
                 'url' => $url,
                 'N' => (string) $currentBatch,
-            ]);
+            ];
+            $system = $this->replacer->replace($template['system'] ?? '', $replace);
+            $userPrompt = $this->replacer->replace($userTemplate, $replace);
 
             $messages = [
                 ['role' => 'system', 'content' => $system],
@@ -115,7 +115,16 @@ class LLMClient
         }
 
         if (! $this->canUseProvider($provider)) {
-            Log::warning('Provider unavailable for batch validation', ['provider' => $provider]);
+            $reason = match (true) {
+                $provider === 'openai' && empty(config('citations.openai.api_key')) => 'missing_OPENAI_API_KEY',
+                $provider === 'gemini' && empty(config('citations.gemini.api')) => 'missing_GOOGLE_API_KEY',
+                default => 'unknown',
+            };
+            Log::warning('Provider skipped for citation batch (no HTTP call)', [
+                'provider' => $provider,
+                'reason' => $reason,
+                'hint' => 'set env and run php artisan config:clear',
+            ]);
 
             return [];
         }
@@ -241,10 +250,6 @@ class LLMClient
 
     protected function canUseProvider(string $provider): bool
     {
-        if ($this->breaker->isBlocked($provider)) {
-            return false;
-        }
-
         return match ($provider) {
             'openai' => ! empty(config('citations.openai.api_key')),
             'gemini' => ! empty(config('citations.gemini.api')),

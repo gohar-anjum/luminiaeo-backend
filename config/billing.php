@@ -24,6 +24,11 @@ return [
     'signup_bonus_credits' => (int) env('BILLING_SIGNUP_BONUS_CREDITS', 10),
 
     /*
+    | Absolute max credits per single admin adjustment (add or remove).
+    */
+    'admin_adjust_max_credits' => (int) env('BILLING_ADMIN_ADJUST_MAX_CREDITS', 1_000_000),
+
+    /*
     |--------------------------------------------------------------------------
     | Stripe (one-time checkout only; keys from env)
     |--------------------------------------------------------------------------

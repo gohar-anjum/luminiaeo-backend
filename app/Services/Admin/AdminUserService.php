@@ -84,6 +84,21 @@ class AdminUserService
         return $user->fresh();
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function serializeCreditTransaction(CreditTransaction $tx): array
+    {
+        return [
+            'id' => $tx->id,
+            'type' => $tx->type,
+            'amount' => (int) $tx->amount,
+            'balance_after' => (int) $tx->balance_after,
+            'user_id' => (int) $tx->user_id,
+            'created_at' => Iso8601::utcZ($tx->created_at),
+        ];
+    }
+
     public function suspend(User $user): void
     {
         $user->forceFill(['suspended_at' => now()])->save();
@@ -97,17 +112,18 @@ class AdminUserService
     /**
      * Positive delta adds credits; negative removes (when balance allows).
      */
-    public function adjustCredits(User $user, int $delta, ?int $adminUserId = null): CreditTransaction
+    public function adjustCredits(User $user, int $delta, ?int $adminUserId = null, ?string $note = null): CreditTransaction
     {
         if ($delta === 0) {
             throw new \InvalidArgumentException('Delta must be non-zero.');
         }
 
         $context = [
-            'metadata' => [
+            'metadata' => array_filter([
                 'admin_user_id' => $adminUserId,
                 'source' => 'admin_adjustment',
-            ],
+                'note' => $note,
+            ], fn ($v) => $v !== null && $v !== ''),
         ];
 
         if ($delta > 0) {

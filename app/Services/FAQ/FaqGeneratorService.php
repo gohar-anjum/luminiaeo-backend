@@ -1543,33 +1543,12 @@ class FaqGeneratorService
 
     protected function shouldTryLLM(string $provider): bool
     {
-        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        $failureCount = Cache::get($circuitBreakerKey.':failures', 0);
-        $lastFailure = Cache::get($circuitBreakerKey.':last_failure');
-
-        if ($failureCount >= 5) {
-            if ($lastFailure && now()->diffInMinutes($lastFailure) < 10) {
-                return false;
-            }
-            Cache::forget($circuitBreakerKey.':failures');
-        }
-
         return true;
     }
 
-    protected function recordLLMSuccess(string $provider): void
-    {
-        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        Cache::forget($circuitBreakerKey.':failures');
-        Cache::forget($circuitBreakerKey.':last_failure');
-    }
+    protected function recordLLMSuccess(string $provider): void {}
 
-    protected function recordLLMFailure(string $provider): void
-    {
-        $circuitBreakerKey = "faq:llm:circuit_breaker:{$provider}";
-        $failures = Cache::increment($circuitBreakerKey.':failures', 1);
-        Cache::put($circuitBreakerKey.':last_failure', now(), 600);
-    }
+    protected function recordLLMFailure(string $provider): void {}
 
     /**
      * Generate answers for a specific set of questions with keyword context.
