@@ -3,7 +3,6 @@
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 class KeywordResearchRequest extends FormRequest
 {
@@ -20,13 +19,6 @@ class KeywordResearchRequest extends FormRequest
                 'string',
                 'max:255',
                 'min:1',
-            ],
-            'project_id' => [
-                'nullable',
-                'integer',
-                Rule::exists('projects', 'id')->where(function ($query) {
-                    return $query->where('user_id', $this->user()->id);
-                }),
             ],
             'language_code' => [
                 'nullable',
@@ -71,7 +63,6 @@ class KeywordResearchRequest extends FormRequest
             'query.string' => 'The search query must be a string.',
             'query.max' => 'The search query must not exceed 255 characters.',
             'query.min' => 'The search query must be at least 1 character.',
-            'project_id.exists' => 'The selected project does not exist.',
             'language_code.size' => 'Language code must be exactly 2 characters.',
             'language_code.regex' => 'Language code must be a valid ISO 639-1 code.',
             'geo_target_id.integer' => 'Geo target ID must be an integer.',

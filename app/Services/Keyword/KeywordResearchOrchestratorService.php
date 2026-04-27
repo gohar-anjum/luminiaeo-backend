@@ -2,18 +2,12 @@
 
 namespace App\Services\Keyword;
 
-use App\DTOs\KeywordDataDTO;
 use App\Jobs\ProcessKeywordIntentJob;
 use App\Models\Keyword;
 use App\Models\KeywordCluster;
 use App\Models\KeywordResearchJob;
-use App\Services\Google\KeywordPlannerService;
 use App\Services\DataForSEO\DataForSEOService;
-use App\Services\Keyword\KeywordScraperService;
-use App\Services\Keyword\SemanticClusteringService;
-use App\Services\Keyword\KeywordCacheService;
-use App\Services\Keyword\KeywordClusteringCacheService;
-use App\Services\Keyword\CombinedKeywordService;
+use App\Services\Google\KeywordPlannerService;
 use App\Services\LLM\LLMClient;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,14 +24,13 @@ class KeywordResearchOrchestratorService
         protected KeywordClusteringCacheService $clusteringCacheService,
         protected CombinedKeywordService $combinedKeywordService,
         protected LLMClient $llmClient
-    ) {
-    }
+    ) {}
 
     public function process(KeywordResearchJob $job): void
     {
         $settings = is_array($job->settings) ? $job->settings : [];
-        $maxKeywords = isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0 
-            ? (int) $settings['max_keywords'] 
+        $maxKeywords = isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0
+            ? (int) $settings['max_keywords']
             : null;
 
         $this->updateProgress($job, 'collecting', 10);
@@ -99,18 +92,18 @@ class KeywordResearchOrchestratorService
 
         $useGooglePlanner = $settings['enable_google_planner'] ?? true;
         $useDataForSEOPlanner = config('services.dataforseo.keyword_planner_enabled', false);
-        
+
         if ($useDataForSEOPlanner) {
             $useGooglePlanner = false;
         }
-        
-        if ($useGooglePlanner && !$useDataForSEOPlanner) {
+
+        if ($useGooglePlanner && ! $useDataForSEOPlanner) {
             try {
                 $maxPlannerKeywords = null;
                 if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
                     $maxPlannerKeywords = (int) $settings['max_keywords'];
                 }
-                
+
                 $plannerKeywords = $this->keywordPlannerService->getKeywordIdeas(
                     $seedKeyword,
                     $this->mapLanguageCode($languageCode),
@@ -129,7 +122,7 @@ class KeywordResearchOrchestratorService
                 if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
                     $maxPlannerKeywords = (int) $settings['max_keywords'];
                 }
-                
+
                 $plannerKeywords = $this->dataForSEOService->getKeywordIdeas(
                     $seedKeyword,
                     $languageCode,
@@ -141,50 +134,50 @@ class KeywordResearchOrchestratorService
             }
         }
 
-       /* if ($settings['enable_scraper'] ?? true) {
-            try {
-                $scraperKeywords = $this->scraperService->scrapeAll($seedKeyword, $languageCode);
-                $allKeywords = array_merge($allKeywords, $scraperKeywords);
+        /* if ($settings['enable_scraper'] ?? true) {
+             try {
+                 $scraperKeywords = $this->scraperService->scrapeAll($seedKeyword, $languageCode);
+                 $allKeywords = array_merge($allKeywords, $scraperKeywords);
 
-                Log::info('Keyword scraper completed', [
-                    'job_id' => $job->id,
-                    'keywords_found' => count($scraperKeywords),
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('Keyword scraper failed', [
-                    'job_id' => $job->id,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }*/
+                 Log::info('Keyword scraper completed', [
+                     'job_id' => $job->id,
+                     'keywords_found' => count($scraperKeywords),
+                 ]);
+             } catch (\Throwable $e) {
+                 Log::error('Keyword scraper failed', [
+                     'job_id' => $job->id,
+                     'error' => $e->getMessage(),
+                 ]);
+             }
+         }*/
 
-       /* if ($settings['enable_combined_keywords'] ?? true) {
-            try {
-                $maxCombinedKeywords = null;
-                if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
-                    $maxCombinedKeywords = (int) ($settings['max_keywords'] * 0.4);
-                }
-                
-                $combinedKeywords = $this->combinedKeywordService->getCombinedKeywords(
-                    $seedKeyword,
-                    (int) $geoTargetId,
-                    $languageCode,
-                    $maxCombinedKeywords
-                );
-                $allKeywords = array_merge($allKeywords, $combinedKeywords);
+        /* if ($settings['enable_combined_keywords'] ?? true) {
+             try {
+                 $maxCombinedKeywords = null;
+                 if (isset($settings['max_keywords']) && is_numeric($settings['max_keywords']) && $settings['max_keywords'] > 0) {
+                     $maxCombinedKeywords = (int) ($settings['max_keywords'] * 0.4);
+                 }
 
-                Log::info('Combined keywords (DataForSEO + AlsoAsked) completed', [
-                    'job_id' => $job->id,
-                    'keywords_found' => count($combinedKeywords),
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('Combined keywords failed', [
-                    'job_id' => $job->id,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
-            }
-        }*/
+                 $combinedKeywords = $this->combinedKeywordService->getCombinedKeywords(
+                     $seedKeyword,
+                     (int) $geoTargetId,
+                     $languageCode,
+                     $maxCombinedKeywords
+                 );
+                 $allKeywords = array_merge($allKeywords, $combinedKeywords);
+
+                 Log::info('Combined keywords (DataForSEO + AlsoAsked) completed', [
+                     'job_id' => $job->id,
+                     'keywords_found' => count($combinedKeywords),
+                 ]);
+             } catch (\Throwable $e) {
+                 Log::error('Combined keywords failed', [
+                     'job_id' => $job->id,
+                     'error' => $e->getMessage(),
+                     'trace' => $e->getTraceAsString(),
+                 ]);
+             }
+         }*/
 
         return $this->deduplicateKeywords($allKeywords);
     }
@@ -193,56 +186,16 @@ class KeywordResearchOrchestratorService
     {
         $keywordIds = [];
 
-        if (!$job->relationLoaded('user')) {
-            $job->load('user');
-        }
-
         DB::transaction(function () use ($job, $keywords, &$keywordIds) {
             $batchSize = 500;
             $batches = array_chunk($keywords, $batchSize);
 
-            // Detect which columns exist in the keywords table
             $existingColumns = Schema::getColumnListing('keywords');
             $keywordColumns = array_flip($existingColumns);
 
-            $projectId = $job->project_id ?? null;
-            $projectSource = null;
-            
-            if ($projectId) {
-                $projectSource = 'job';
-            } elseif ($job->user_id) {
-                $firstProject = DB::table('projects')
-                    ->where('user_id', $job->user_id)
-                    ->first();
-                $projectId = $firstProject?->id ?? null;
-                
-                if ($projectId) {
-                    $projectSource = 'user_first_project';
-                }
-            }
-            
-            if ($projectId === null && $job->user_id) {
-                try {
-                    $projectId = DB::table('projects')->insertGetId([
-                        'user_id' => $job->user_id,
-                        'name' => 'Default Project',
-                        'domain' => null,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                    
-                    $projectSource = 'auto_created';
-                } catch (\Exception $e) {
-                    throw new \RuntimeException(
-                        'Cannot insert keywords: project_id is required. Failed to auto-create default project: ' . $e->getMessage()
-                    );
-                }
-            }
-            
-            if ($projectId === null) {
+            if (! isset($keywordColumns['keyword_research_job_id'])) {
                 throw new \RuntimeException(
-                    'Cannot insert keywords: project_id is required but not found. ' .
-                    'Please ensure the keyword research job has a valid project_id or the user has at least one project.'
+                    'The keywords table must have a keyword_research_job_id column. Run database migrations.'
                 );
             }
 
@@ -252,21 +205,14 @@ class KeywordResearchOrchestratorService
                 $now = now();
 
                 foreach ($batch as $keywordDTO) {
-                    // Check if keyword already exists for this job
-                    $existingKeyword = null;
-                    if (isset($keywordColumns['keyword_research_job_id'])) {
-                        $existingKeyword = Keyword::where('keyword', $keywordDTO->keyword)
-                            ->where('keyword_research_job_id', $job->id)
-                            ->first();
-                    } else {
-                        $existingKeyword = Keyword::where('keyword', $keywordDTO->keyword)
-                            ->where('project_id', $projectId)
-                            ->first();
-                    }
+                    $existingKeyword = Keyword::where('keyword', $keywordDTO->keyword)
+                        ->where('keyword_research_job_id', $job->id)
+                        ->first();
 
                     if ($existingKeyword) {
                         // Keyword already exists for this job, use existing ID
                         $existingKeywordIds[] = $existingKeyword->id;
+
                         continue;
                     }
 
@@ -281,9 +227,9 @@ class KeywordResearchOrchestratorService
                         'updated_at' => $now,
                     ];
 
-                    if (!empty($keywordColumns)) {
+                    if (! empty($keywordColumns)) {
                         if (isset($keywordColumns['project_id'])) {
-                            $row['project_id'] = $projectId;
+                            $row['project_id'] = null;
                         }
                         if (isset($keywordColumns['keyword_research_job_id'])) {
                             $row['keyword_research_job_id'] = $job->id;
@@ -314,7 +260,7 @@ class KeywordResearchOrchestratorService
                     $insertData[] = $row;
                 }
 
-                if (!empty($insertData)) {
+                if (! empty($insertData)) {
                     try {
                         Keyword::insert($insertData);
                     } catch (\Throwable $e) {
@@ -328,16 +274,11 @@ class KeywordResearchOrchestratorService
                 }
 
                 // Get IDs of all keywords for this job (both newly inserted and existing)
-                $keywordTexts = array_map(fn($dto) => $dto->keyword, $batch);
-                $query = Keyword::whereIn('keyword', $keywordTexts);
-                
-                if (isset($keywordColumns['keyword_research_job_id'])) {
-                    $query->where('keyword_research_job_id', $job->id);
-                } else {
-                    $query->where('project_id', $projectId);
-                }
-                
-                $insertedKeywords = $query->pluck('id')->toArray();
+                $keywordTexts = array_map(fn ($dto) => $dto->keyword, $batch);
+                $insertedKeywords = Keyword::whereIn('keyword', $keywordTexts)
+                    ->where('keyword_research_job_id', $job->id)
+                    ->pluck('id')
+                    ->toArray();
                 $keywordIds = array_merge($keywordIds, $insertedKeywords, $existingKeywordIds);
             }
         });
@@ -387,19 +328,19 @@ class KeywordResearchOrchestratorService
         // Get available columns to avoid selecting non-existent columns
         $existingColumns = Schema::getColumnListing('keywords');
         $columnMap = array_flip($existingColumns);
-        
+
         // Build select array with only existing columns
         $selectColumns = ['id', 'keyword', 'search_volume', 'competition', 'cpc'];
         $optionalColumns = ['source', 'intent_category', 'ai_visibility_score'];
-        
+
         foreach ($optionalColumns as $col) {
             if (isset($columnMap[$col])) {
                 $selectColumns[] = $col;
             }
         }
-        
-        $selectColumns = array_filter($selectColumns, fn($col) => $col !== 'question_variations');
-        
+
+        $selectColumns = array_filter($selectColumns, fn ($col) => $col !== 'question_variations');
+
         $keywords = $job->keywords()
             ->select($selectColumns)
             ->get();
@@ -409,7 +350,7 @@ class KeywordResearchOrchestratorService
         if (isset($columnMap['source'])) {
             $sources = $keywords->groupBy('source')->map->count()->toArray();
         }
-        
+
         // Calculate avg AI visibility score safely
         $avgAiVisibilityScore = null;
         if (isset($columnMap['ai_visibility_score'])) {
@@ -430,7 +371,7 @@ class KeywordResearchOrchestratorService
                     'competition' => $keyword->competition,
                     'cpc' => $keyword->cpc,
                 ];
-                
+
                 // Add optional fields only if they exist
                 if (isset($columnMap['source'])) {
                     $result['source'] = $keyword->source;
@@ -441,7 +382,7 @@ class KeywordResearchOrchestratorService
                 if (isset($columnMap['ai_visibility_score'])) {
                     $result['ai_visibility_score'] = $keyword->ai_visibility_score;
                 }
-                
+
                 return $result;
             }),
         ];
@@ -454,7 +395,7 @@ class KeywordResearchOrchestratorService
 
         foreach ($keywords as $keyword) {
             $normalized = strtolower(trim($keyword->keyword));
-            if (!isset($seen[$normalized])) {
+            if (! isset($seen[$normalized])) {
                 $seen[$normalized] = true;
                 $unique[] = $keyword;
             }

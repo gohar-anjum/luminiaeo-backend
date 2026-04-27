@@ -7,7 +7,6 @@ use App\Interfaces\KeywordRepositoryInterface;
 use App\Jobs\ProcessKeywordResearchJob;
 use App\Models\KeywordResearchJob as KeywordResearchJobModel;
 use App\Services\Keyword\KeywordResearchOrchestratorService;
-use App\Services\KeywordResearchJobRepository;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -15,8 +14,11 @@ use Illuminate\Support\Facades\Log;
 class KeywordService
 {
     protected KeywordRepositoryInterface $keywordRepository;
+
     protected ApiResponseModifier $response;
+
     protected KeywordResearchOrchestratorService $orchestrator;
+
     protected KeywordResearchJobRepository $jobRepository;
 
     public function __construct(
@@ -34,11 +36,11 @@ class KeywordService
     public function createKeywordResearch(KeywordResearchRequestDTO $dto, ?int $creditReservationId = null): KeywordResearchJobModel
     {
         $userId = Auth::id();
-        
+
         // Check for duplicate job (request deduplication)
-        $lockKey = 'keyword_research:lock:' . md5($userId . ':' . $dto->query);
+        $lockKey = 'keyword_research:lock:'.md5($userId.':'.$dto->query);
         $timeout = config('cache_locks.keyword_research.timeout', 10);
-        
+
         return Cache::lock($lockKey, $timeout)->get(function () use ($userId, $dto, $creditReservationId) {
             // Check again after acquiring lock
             $duplicate = $this->jobRepository->findRecentDuplicate($userId, $dto->query, 5);
@@ -48,6 +50,7 @@ class KeywordService
                     'user_id' => $userId,
                     'query' => $dto->query,
                 ]);
+
                 return $duplicate;
             }
 
@@ -58,7 +61,6 @@ class KeywordService
             ];
 
             $optionalData = [
-                'project_id' => $dto->projectId,
                 'language_code' => $dto->languageCode,
                 'geoTargetId' => $dto->geoTargetId,
                 'credit_reservation_id' => $creditReservationId,
@@ -93,7 +95,7 @@ class KeywordService
 
     public function getKeywordResearchStatus(int $jobId)
     {
-        $job = KeywordResearchJobModel::with(['keywords'/*, 'clusters'*/])->findOrFail($jobId);
+        $job = KeywordResearchJobModel::with(['keywords'/* , 'clusters' */])->findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();
@@ -114,7 +116,7 @@ class KeywordService
 
     public function getKeywordResearchResults(int $jobId)
     {
-        $job = KeywordResearchJobModel::with(['keywords'/*, 'keywords.cluster', 'clusters'*/])->findOrFail($jobId);
+        $job = KeywordResearchJobModel::with(['keywords'/* , 'keywords.cluster', 'clusters' */])->findOrFail($jobId);
 
         if ($job->user_id !== Auth::id()) {
             return $this->response->setMessage('Unauthorized')->setResponseCode(403)->response();

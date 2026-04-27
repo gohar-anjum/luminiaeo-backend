@@ -947,11 +947,11 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"query\": \"best running shoes\",\n  \"project_id\": null,\n  \"language_code\": \"en\",\n  \"geo_target_id\": 2840,\n  \"max_keywords\": 500,\n  \"enable_google_planner\": true,\n  \"enable_scraper\": true,\n  \"enable_clustering\": true,\n  \"enable_intent_scoring\": true\n}",
+              "raw": "{\n  \"query\": \"best running shoes\",\n  \"language_code\": \"en\",\n  \"geo_target_id\": 2840,\n  \"max_keywords\": 500,\n  \"enable_google_planner\": true,\n  \"enable_scraper\": true,\n  \"enable_clustering\": true,\n  \"enable_intent_scoring\": true\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/keyword-research",
-            "description": "`query` required. Defaults: `language_code` en, `geo_target_id` 2840, feature flags true. `project_id` must belong to current user if set. **201** on create; duplicate job may reverse credit reservation."
+            "description": "`query` required. Defaults: `language_code` en, `geo_target_id` 2840, feature flags true. **201** on create; duplicate job may reverse credit reservation."
           }
         },
         {
