@@ -5,12 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Exceptions\DataForSEOException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\KeywordsForSitePlannerRequest;
-use App\Services\Google\KeywordPlannerService;
+use App\Services\ApiResponseModifier;
 use App\Services\DataForSEO\DataForSEOService;
+use App\Services\Google\KeywordPlannerService;
 use App\Services\Keyword\CombinedKeywordService;
 use App\Services\Keyword\InformationalKeywordService;
+use App\Services\Keyword\InformationalPlannerPoolService;
 use App\Services\Keyword\SemanticClusteringService;
-use App\Services\ApiResponseModifier;
 use App\Support\ReservationCompletion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -19,11 +20,18 @@ use InvalidArgumentException;
 class KeywordPlannerController extends Controller
 {
     private KeywordPlannerService $keywordPlannerService;
+
     private DataForSEOService $dataForSEOService;
+
     private CombinedKeywordService $combinedKeywordService;
+
     private InformationalKeywordService $informationalKeywordService;
+
     private SemanticClusteringService $clusteringService;
+
     private ApiResponseModifier $responseModifier;
+
+    private InformationalPlannerPoolService $informationalPlannerPool;
 
     public function __construct(
         KeywordPlannerService $keywordPlannerService,
@@ -31,6 +39,7 @@ class KeywordPlannerController extends Controller
         CombinedKeywordService $combinedKeywordService,
         InformationalKeywordService $informationalKeywordService,
         SemanticClusteringService $clusteringService,
+        InformationalPlannerPoolService $informationalPlannerPool,
         ApiResponseModifier $responseModifier
     ) {
         $this->keywordPlannerService = $keywordPlannerService;
@@ -38,6 +47,7 @@ class KeywordPlannerController extends Controller
         $this->combinedKeywordService = $combinedKeywordService;
         $this->informationalKeywordService = $informationalKeywordService;
         $this->clusteringService = $clusteringService;
+        $this->informationalPlannerPool = $informationalPlannerPool;
         $this->responseModifier = $responseModifier;
     }
 
@@ -47,6 +57,7 @@ class KeywordPlannerController extends Controller
             return ReservationCompletion::run($request, function () use ($request) {
                 $request->validate(['keyword' => 'required|string']);
                 $ideas = $this->keywordPlannerService->getKeywordIdeas($request->keyword);
+
                 return response()->json([
                     'status' => 'success',
                     'count' => count($ideas),
@@ -60,6 +71,7 @@ class KeywordPlannerController extends Controller
                 ->response();
         } catch (\Exception $e) {
             Log::error('Keyword ideas error', ['error' => $e->getMessage()]);
+
             return $this->responseModifier
                 ->setMessage($e->getMessage())
                 ->setResponseCode(500)
@@ -79,38 +91,65 @@ class KeywordPlannerController extends Controller
         $keywords = is_array($keywords) ? array_values(array_filter(array_map('trim', $keywords), fn ($s) => $s !== '')) : [];
 
         try {
-            return ReservationCompletion::run($request, function () use ($request, $keywords) {
-                $request->validate([
-                    'keywords' => 'required_without:keyword|array',
-                    'keywords.*' => 'string|max:255',
-                    'keyword' => 'required_without:keywords|string|max:255',
-                    'location_code' => 'sometimes|integer|min:1',
-                    'language_code' => 'sometimes|string|size:2',
-                    'limit' => 'sometimes|integer|min:1|max:1000',
-                    'top_n' => 'sometimes|integer|min:1|max:100',
-                ]);
+            $wrapped = ReservationCompletion::runWithCondition(
+                $request,
+                function () use ($request, $keywords) {
+                    $request->validate([
+                        'keywords' => 'required_without:keyword|array',
+                        'keywords.*' => 'string|max:255',
+                        'keyword' => 'required_without:keywords|string|max:255',
+                        'location_code' => 'sometimes|integer|min:1',
+                        'language_code' => 'sometimes|string|size:2',
+                        'limit' => 'sometimes|integer|min:1|max:1000',
+                        'top_n' => 'sometimes|integer|min:1|max:100',
+                    ]);
 
-                if (empty($keywords)) {
-                    throw new \InvalidArgumentException('At least one keyword is required.');
-                }
+                    if (empty($keywords)) {
+                        throw new \InvalidArgumentException('At least one keyword is required.');
+                    }
 
-                $result = $this->informationalKeywordService->getTopInformationalKeywords($keywords, [
-                    'location_code' => $request->input('location_code', 2840),
-                    'language_code' => $request->input('language_code', 'en'),
-                    'limit' => $request->input('limit', 500),
-                    'top_n' => $request->input('top_n', 100),
-                ]);
+                    $options = [
+                        'location_code' => (int) $request->input('location_code', 2840),
+                        'language_code' => (string) $request->input('language_code', 'en'),
+                        'limit' => (int) $request->input('limit', 500),
+                        'top_n' => (int) $request->input('top_n', 100),
+                    ];
 
-                $data = array_map(fn ($dto) => $dto->toArray(), $result);
+                    $resolved = $this->informationalPlannerPool->resolve(
+                        $request->user(),
+                        $keywords,
+                        $options,
+                        fn () => $this->informationalKeywordService->getTopInformationalKeywords($keywords, $options)
+                    );
 
-                return $this->responseModifier
-                    ->setData([
-                        'keywords' => $data,
-                        'total_count' => count($data),
-                    ])
-                    ->setMessage('Top informational keyword ideas retrieved successfully.')
-                    ->response();
-            });
+                    $isFresh = $resolved['served_from'] === 'fresh';
+
+                    return [
+                        'bill_for_request' => $resolved['bill'],
+                        'response' => $this->responseModifier
+                            ->setData([
+                                'saved_id' => $resolved['query']->id,
+                                'keywords' => $resolved['data'],
+                                'total_count' => count($resolved['data']),
+                                'served_from' => $resolved['served_from'],
+                            ])
+                            ->setMessage(
+                                $isFresh
+                                    ? 'Top informational keyword ideas retrieved successfully.'
+                                    : 'Served from shared results (pooled; no new API usage).'
+                            )
+                            ->response(),
+                    ];
+                },
+                /** @param  array{bill_for_request: bool, response: \Symfony\Component\HttpFoundation\Response}  $result */
+                fn (array $result): bool => $result['bill_for_request'] === true
+            );
+
+            if (is_array($wrapped) && isset($wrapped['response'])) {
+                return $wrapped['response'];
+            }
+
+            return $wrapped;
         } catch (\InvalidArgumentException $e) {
             return $this->responseModifier
                 ->setMessage($e->getMessage())
@@ -121,8 +160,9 @@ class KeywordPlannerController extends Controller
                 'error' => $e->getMessage(),
                 'keywords' => $keywords,
             ]);
+
             return $this->responseModifier
-                ->setMessage('DataForSEO API error: ' . $e->getMessage())
+                ->setMessage('DataForSEO API error: '.$e->getMessage())
                 ->setResponseCode($e->getStatusCode() ?? 500)
                 ->response();
         } catch (\Exception $e) {
@@ -131,6 +171,7 @@ class KeywordPlannerController extends Controller
                 'keywords' => $keywords,
                 'trace' => $e->getTraceAsString(),
             ]);
+
             return $this->responseModifier
                 ->setMessage('An unexpected error occurred. Please try again.')
                 ->setResponseCode(500)
@@ -166,7 +207,7 @@ class KeywordPlannerController extends Controller
             });
         } catch (InvalidArgumentException $e) {
             return $this->responseModifier
-                ->setMessage('Invalid request: ' . $e->getMessage())
+                ->setMessage('Invalid request: '.$e->getMessage())
                 ->setResponseCode(422)
                 ->response();
         } catch (DataForSEOException $e) {
@@ -174,12 +215,14 @@ class KeywordPlannerController extends Controller
                 'error' => $e->getMessage(),
                 'error_code' => $e->getCode(),
             ]);
+
             return $this->responseModifier
-                ->setMessage('DataForSEO API error: ' . $e->getMessage())
+                ->setMessage('DataForSEO API error: '.$e->getMessage())
                 ->setResponseCode($e->getStatusCode() ?? 500)
                 ->response();
         } catch (\Exception $e) {
             Log::error('Unexpected error getting keywords for site', ['error' => $e->getMessage()]);
+
             return $this->responseModifier
                 ->setMessage('An unexpected error occurred. Please try again.')
                 ->setResponseCode(500)
@@ -250,8 +293,9 @@ class KeywordPlannerController extends Controller
                 'error' => $e->getMessage(),
                 'target' => $request->input('target'),
             ]);
+
             return $this->responseModifier
-                ->setMessage('Failed to retrieve combined keywords: ' . $e->getMessage())
+                ->setMessage('Failed to retrieve combined keywords: '.$e->getMessage())
                 ->setResponseCode(500)
                 ->response();
         }

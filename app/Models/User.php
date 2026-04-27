@@ -42,6 +42,12 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(\App\Domain\Billing\Models\CreditTransaction::class);
     }
 
+    public function informationalPlannerQueries(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(InformationalPlannerQuery::class, 'informational_planner_query_user')
+            ->withTimestamps();
+    }
+
     public function apiResults(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
         return $this->belongsToMany(ApiResult::class, 'user_api_results', 'user_id', 'api_result_id')

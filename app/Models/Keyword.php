@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Keyword extends Model
 {
     use HasFactory;
+
     protected $fillable = [
         'keyword',
         'search_volume',
@@ -19,8 +20,8 @@ class Keyword extends Model
     ];
 
     // Note: The following columns are conditionally handled - only included if they exist in database:
-    // keyword_research_job_id, keyword_cluster_id, source, ai_visibility_score, intent_category,
-    // intent_metadata, long_tail_versions, semantic_data, language_code, geoTargetId
+    // keyword_research_job_id, informational_planner_query_id, keyword_cluster_id, source,
+    // ai_visibility_score, intent_category, intent_metadata, long_tail_versions, semantic_data, language_code, geoTargetId
 
     protected $casts = [
         'search_volume' => 'integer',
@@ -36,6 +37,11 @@ class Keyword extends Model
     public function keywordResearchJob(): BelongsTo
     {
         return $this->belongsTo(KeywordResearchJob::class);
+    }
+
+    public function informationalPlannerQuery(): BelongsTo
+    {
+        return $this->belongsTo(InformationalPlannerQuery::class);
     }
 
     public function cluster(): BelongsTo

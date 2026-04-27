@@ -1091,7 +1091,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": "{{base_url}}/api/keyword-planner/informational-ideas",
-            "description": "Either `keyword` OR `keywords` array required. Optional: `location_code`, `language_code`, `limit` (1–1000), `top_n` (1–100). **credit.deduct**."
+            "description": "Either `keyword` OR `keywords` array required. Optional: `location_code`, `language_code`, `limit` (1–1000), `top_n` (1–100). **credit.deduct** — only **completed** (charged) on first creation of a shared `informational_planner_queries` row (pooled, default TTL `INFORMATIONAL_PLANNER_DEDUP_TTL_DAYS`). Other users: credits **reversed**. Response: `saved_id` = that query’s id, `served_from` `fresh` | `shared_pool`."
           }
         },
         {

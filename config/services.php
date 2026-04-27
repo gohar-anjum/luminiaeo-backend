@@ -110,6 +110,10 @@ return [
         'timeout' => env('KEYWORD_INTENT_SERVICE_TIMEOUT', 60),
     ],
 
+    'informational_planner' => [
+        'dedup_ttl_days' => (int) env('INFORMATIONAL_PLANNER_DEDUP_TTL_DAYS', 14),
+    ],
+
     'serp' => [
         'base_url' => env('SERP_API_BASE_URL', 'https://serpapi.com'),
         'api_key' => env('SERP_API_KEY'),
