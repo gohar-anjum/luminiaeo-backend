@@ -11,8 +11,11 @@ return new class extends Migration
         Schema::create('informational_planner_query_user', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('informational_planner_query_id')
-                ->constrained('informational_planner_queries')
+            // Short FK name: MySQL max identifier length is 64; default name exceeds it.
+            $table->foreignId('informational_planner_query_id');
+            $table->foreign('informational_planner_query_id', 'fk_ipq_user_query')
+                ->references('id')
+                ->on('informational_planner_queries')
                 ->cascadeOnDelete();
             $table->timestamps();
 
