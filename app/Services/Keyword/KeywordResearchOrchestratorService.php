@@ -314,11 +314,16 @@ class KeywordResearchOrchestratorService
                     $insertData[] = $row;
                 }
 
-                // Insert new keywords
                 if (!empty($insertData)) {
                     try {
                         Keyword::insert($insertData);
-                    } catch (\Exception $e) {
+                    } catch (\Throwable $e) {
+                        Log::error('Keyword bulk insert failed', [
+                            'job_id' => $job->id,
+                            'batch_size' => count($insertData),
+                            'error' => $e->getMessage(),
+                        ]);
+                        throw $e;
                     }
                 }
 

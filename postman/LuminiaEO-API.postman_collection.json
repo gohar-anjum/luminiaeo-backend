@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "LuminiaEO API",
-    "description": "REST API for the LuminiaEO Laravel backend (keyword research, clusters, citations, SERP, page analysis, billing).\n\n## Base URL\nSet `base_url` (e.g. `http://localhost` or your deployed origin). All routes below are under `/api`.\n\n## Authentication\nProtected routes use **Laravel Sanctum** personal access tokens. Call **Login** or use a token from your app, then set `auth_token`. Send header: `Authorization: Bearer {{auth_token}}` and `Accept: application/json`.\n\n## Response shape (most endpoints)\nControllers using `ApiResponseModifier` return JSON:\n```json\n{\n  \"status\": <http_status>,\n  \"message\": \"...\",\n  \"response\": { ... }\n}\n```\n**Exceptions:** `GET /api/health` returns a plain `{ \"status\", \"timestamp\", \"checks\" }` object. Some flows (e.g. keyword ideas) may return other shapes.\n\n## Credits\nSeveral routes use the `credit.deduct` middleware (reserves/completes credits). Insufficient balance may yield **402** with a JSON body (see keyword clusters). Use **Billing → Balance** and **Features** to inspect costs.\n\n## Rate limits (per user, per minute)\n- Citations: 20\n- Keyword research: 10\n- Keyword clusters: 15\n- Keyword planner: 20\n- SEO / DataForSEO: 60\n- SERP: 60\n- FAQ: 30\n- Page analysis: 30\n\n## Stripe\n`POST /api/billing/webhook` is for **Stripe** only (signature verification). Do not call from Postman unless you simulate Stripe signatures.\n\n## Web OAuth\nGoogle OAuth lives on **web** routes (`/google/authorize`, `/google/callback`), not under `/api`.\n\n## Admin (billable features)\nFolder **Admin — billable features**: `GET/POST/PATCH /api/admin/features*`. Requires **`is_admin`** user token (`403` otherwise). Documented in `docs/ADMIN_API_INTEGRATION.md`. Customer-facing feature list remains **Billing → Features** (`GET /api/billing/features`, active only).\n",
+    "description": "REST API for the LuminiaEO Laravel backend (keyword research, clusters, citations, SERP, page analysis, billing, admin ops).\n\n## Base URL\nSet `base_url` (e.g. `http://localhost` or your deployed origin). All routes below are under `/api`.\n\n## Public extras\n- **Auth → Google ID token login** — `POST /api/auth/google` (Google Sign-In `id_token`).\n- **Contact (public)** — `POST /api/contact` (throttled).\n- **Email verification** — `GET /api/email/verify/{id}/{hash}` (signed; use full URL from email or variables from that link).\n\n## Session\n- **User → Logout** — `POST /api/logout` (revokes current token).\n- **User → Resend verification email** — `POST /api/email/verification-notification` (authenticated, throttled).\n\n## Admin\nAll `GET/POST/.../api/admin/*` routes require `Authorization: Bearer` for a user with **`is_admin = true`**. Folders: **Admin — dashboard, users, backlinks, credit transactions, API logs, product activity, keyword clusters, subscriptions, system, contact submissions**, and **Admin — billable features** (features CRUD). See `docs/ADMIN_API_INTEGRATION.md` where applicable.\n\n## Authentication (customers)\nProtected routes use **Laravel Sanctum** personal access tokens. Call **Login** or use a token from your app, then set `auth_token`. Send header: `Authorization: Bearer {{auth_token}}` and `Accept: application/json`.\n\n## Response shape (most endpoints)\nControllers using `ApiResponseModifier` return JSON:\n```json\n{\n  \"status\": <http_status>,\n  \"message\": \"...\",\n  \"response\": { ... }\n}\n```\n**Exceptions:** `GET /api/health` returns a plain `{ \"status\", \"timestamp\", \"checks\" }` object. Some flows (e.g. keyword ideas) may return other shapes.\n\n## Credits\nSeveral routes use the `credit.deduct` middleware (reserves/completes credits). Insufficient balance may yield **402** with a JSON body (see keyword clusters). Use **Billing → Balance** and **Features** to inspect costs.\n\n## Rate limits (per user, per minute)\n- Citations: 20\n- Keyword research: 10\n- Keyword clusters: 15\n- Keyword planner: 20\n- SEO / DataForSEO: 60\n- SERP: 60\n- FAQ: 30\n- Page analysis: 30\n\n## Stripe\n`POST /api/billing/webhook` is for **Stripe** only (signature verification). Do not call from Postman unless you simulate Stripe signatures.\n\n## Web OAuth\nGoogle OAuth lives on **web** routes (`/google/authorize`, `/google/callback`), not under `/api`.\n\n## Admin (billable features)\nFolder **Admin — billable features**: `GET/POST/PATCH /api/admin/features*`. Requires **`is_admin`** user token (`403` otherwise). Documented in `docs/ADMIN_API_INTEGRATION.md`. Customer-facing feature list remains **Billing → Features** (`GET /api/billing/features`, active only).\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -12,7 +12,14 @@
     { "key": "cluster_job_id", "value": "1" },
     { "key": "faq_task_id", "value": "" },
     { "key": "backlinks_task_id", "value": "" },
-    { "key": "admin_feature_id", "value": "1" }
+    { "key": "admin_feature_id", "value": "1" },
+    { "key": "admin_user_id", "value": "1" },
+    { "key": "admin_backlink_id", "value": "1" },
+    { "key": "admin_cluster_snapshot_id", "value": "1" },
+    { "key": "admin_subscription_id", "value": "1" },
+    { "key": "admin_contact_submission_id", "value": "1" },
+    { "key": "email_verify_user_id", "value": "1" },
+    { "key": "email_verify_hash", "value": "paste_from_verification_link" }
   ],
   "item": [
     {
@@ -109,6 +116,61 @@
             },
             "url": "{{base_url}}/api/reset-password",
             "description": "Token expires after 60 minutes. On success, invalidates all existing Sanctum tokens for that user."
+          }
+        },
+        {
+          "name": "Google ID token login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_token\": \"<Google Sign-In id_token>\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/auth/google",
+            "description": "Exchanges a Google `id_token` (from Google Identity Services) for a Sanctum token. Requires `GOOGLE_OAUTH_CLIENT_ID` to match the app. **401** if token invalid; **403** if account suspended; **409** if email matches an admin (password sign-in only)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Contact (public)",
+      "description": "Throttled **5/min** per IP. No authentication.",
+      "item": [
+        {
+          "name": "Submit contact form",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jane Doe\",\n  \"email\": \"jane@example.com\",\n  \"message\": \"Hello, I have a question about LuminiaEO.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/contact",
+            "description": "`name` max 120; `message` 5–5000 chars. **201** with submission `id` in `response`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Email verification (signed URL)",
+      "description": "Laravel **signed** route from the verification email. You cannot forge `hash` in Postman; use the full URL from the mail, or the **Resend verification** request while authenticated.",
+      "item": [
+        {
+          "name": "Verify email (from link)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/email/verify/{{email_verify_user_id}}/{{email_verify_hash}}",
+            "description": "Throttled 6/min. The signed URL includes `expires` and `signature` query params; paste the **complete** link from the email into the Postman URL bar, or set variables from that link. **400** if signature invalid or expired."
           }
         }
       ]
@@ -210,6 +272,520 @@
             },
             "url": "{{base_url}}/api/user/profile",
             "description": "Send any combination of profile fields (`name`, `email`) and/or password change (`current_password`, `password`, `password_confirmation`). At least one group required. Returns updated `user` in `response`."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/logout",
+            "description": "Revokes the **current** Sanctum personal access token. Other sessions/tokens remain valid until revoked."
+          }
+        },
+        {
+          "name": "Resend verification email",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/email/verification-notification",
+            "description": "Throttled **6/min**. **200** if link sent. If email already verified (or user is admin, treated as verified), **200** with informational message. Requires `not_suspended` and email flow middleware when applicable."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — dashboard",
+      "description": "Admin metrics. **Bearer + `is_admin`**. Plain JSON, not `ApiResponseModifier` envelope.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Dashboard stats",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/dashboard/stats",
+            "description": "Cached aggregate stats for the admin home dashboard."
+          }
+        },
+        {
+          "name": "Dashboard charts",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/dashboard/charts",
+            "description": "Cached time-series / chart data for the admin dashboard."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — users",
+      "description": "Customer users only: admin accounts are hidden from `show` (404) and cannot be suspended or credit-adjusted via these routes. **Bearer + `is_admin`**. Plain JSON responses.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List users",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/users?page=1&per_page=20&search=&suspended=",
+            "description": "Query: `page`, `per_page` (max 100), `search`, `suspended` (boolean). Paginated `data` + `meta`."
+          }
+        },
+        {
+          "name": "Create user",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New User\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"password12\",\n  \"password_confirmation\": \"password12\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/admin/users",
+            "description": "**201** — creates a customer user with default signup/billing behavior. Email must be unique."
+          }
+        },
+        {
+          "name": "Get user",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/users/{{admin_user_id}}?include_product_activity=1",
+            "description": "Optional `include_product_activity=1` adds per-feature counts. **404** for admin user ids."
+          }
+        },
+        {
+          "name": "Suspend user",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/users/{{admin_user_id}}/suspend",
+            "description": "**403** if target is an admin account."
+          }
+        },
+        {
+          "name": "Unsuspend user",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/users/{{admin_user_id}}/unsuspend",
+            "description": "**403** if target is an admin account."
+          }
+        },
+        {
+          "name": "Adjust credits",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 100,\n  \"note\": \"Manual top-up from support\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/admin/users/{{admin_user_id}}/adjust-credits",
+            "description": "`amount` non-zero integer (max magnitude from `config('billing.admin_adjust_max_credits')`); positive adds, negative debits. Optional `note` (max 2000 chars). Returns `user` + `transaction`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — backlinks",
+      "description": "Backlink review queue. **Bearer + `is_admin`**. Plain JSON.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List backlinks",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/backlinks?page=1&per_page=50&status=pending&domain=",
+            "description": "Query: `status` optional `pending|verified|failed`, `domain` filter, pagination."
+          }
+        },
+        {
+          "name": "Get backlink",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/backlinks/{{admin_backlink_id}}",
+            "description": "Includes related `seoTask` / user context when available."
+          }
+        },
+        {
+          "name": "Verify backlink",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/backlinks/{{admin_backlink_id}}/verify",
+            "description": "Marks backlink as verified per admin service rules."
+          }
+        },
+        {
+          "name": "Delete backlink",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "DELETE",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/backlinks/{{admin_backlink_id}}",
+            "description": "**204** No Content on success."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — credit transactions",
+      "description": "Wallet ledger for all users. **Bearer + `is_admin`**. Export returns **CSV** download.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List transactions",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/credit-transactions?page=1&per_page=50&user_id=&type=",
+            "description": "Optional filters: `user_id`, `type` (string, max 64)."
+          }
+        },
+        {
+          "name": "Export transactions (CSV)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/csv" }],
+            "url": "{{base_url}}/api/admin/credit-transactions/export?user_id=&type=",
+            "description": "Same filters as list. Response is a streamed **CSV** file (save from Postman **Send and Download**)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — API logs",
+      "description": "Internal upstream API cache / resolve logs. **Bearer + `is_admin`**. See `context` in list response. Export is **CSV**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List API logs",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/api-logs?page=1&per_page=50&user_id=&endpoint=&method=",
+            "description": "Filter by `user_id`, `endpoint`, `method` (e.g. GET, POST)."
+          }
+        },
+        {
+          "name": "Export API logs (CSV)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/csv" }],
+            "url": "{{base_url}}/api/admin/api-logs/export?user_id=&endpoint=&method=",
+            "description": "Streamed **CSV**."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — product activity",
+      "description": "User-facing product runs (per feature). **Bearer + `is_admin`**. Paginated `data` + `meta` on all list routes.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Activity — catalog",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/catalog",
+            "description": "Metadata describing each activity type / route."
+          }
+        },
+        {
+          "name": "Activity — FAQ tasks",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/faq-tasks?page=1&per_page=50&user_id=&status=",
+            "description": "Optional `user_id`, `status`."
+          }
+        },
+        {
+          "name": "Activity — citation tasks",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/citation-tasks?page=1&per_page=50&user_id=&status=",
+            "description": "Optional `user_id`, `status`."
+          }
+        },
+        {
+          "name": "Activity — keyword research",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/keyword-research?page=1&per_page=50&user_id=&status=",
+            "description": "Optional `user_id`, `status`."
+          }
+        },
+        {
+          "name": "Activity — meta analyses",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/meta-analyses?page=1&per_page=50&user_id=",
+            "description": "Optional `user_id`."
+          }
+        },
+        {
+          "name": "Activity — semantic analyses",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/semantic-analyses?page=1&per_page=50&user_id=",
+            "description": "Optional `user_id`."
+          }
+        },
+        {
+          "name": "Activity — content outlines",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/content-outlines?page=1&per_page=50&user_id=",
+            "description": "Optional `user_id`."
+          }
+        },
+        {
+          "name": "Activity — FAQs (sync results)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/faqs?page=1&per_page=50&user_id=",
+            "description": "Optional `user_id`."
+          }
+        },
+        {
+          "name": "Activity — PBN detections",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/pbn-detections?page=1&per_page=50&status=&domain=",
+            "description": "Optional `status`, `domain` filters."
+          }
+        },
+        {
+          "name": "Activity — cluster jobs",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/activity/cluster-jobs?page=1&per_page=50&user_id=&status=",
+            "description": "Optional `user_id`, `status`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — keyword clusters (snapshots)",
+      "description": "Browse persisted cluster snapshots. **Bearer + `is_admin`**. `GET .../snapshots` returns all snapshots sharing the same cluster key as the given row.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List cluster snapshots",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/clusters?page=1&per_page=30",
+            "description": "Paginated list of `KeywordClusterSnapshot` rows."
+          }
+        },
+        {
+          "name": "Snapshots for cluster key",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/clusters/{{admin_cluster_snapshot_id}}/snapshots",
+            "description": "`id` is a **cluster snapshot** id; response lists related snapshots in `data`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — subscriptions",
+      "description": "Laravel Cashier subscriptions (if `subscriptions` table exists). **Bearer + `is_admin`**. Plain JSON.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List subscriptions",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/subscriptions?page=1&per_page=30",
+            "description": "Paginated Cashier subscriptions."
+          }
+        },
+        {
+          "name": "Get subscription",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/subscriptions/{{admin_subscription_id}}",
+            "description": "Includes `items` when present. **404** if table missing."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — system",
+      "description": "Cache, health, announcements. **Bearer + `is_admin`**. Plain JSON.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Clear application cache",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/cache/clear",
+            "description": "**200** `{ \"ok\": true }` after `Cache::flush()`-style clear."
+          }
+        },
+        {
+          "name": "System health (admin)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/system/health",
+            "description": "Admin-oriented health JSON (not identical to public `/api/health` unless shared implementation)."
+          }
+        },
+        {
+          "name": "Create announcement",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Scheduled maintenance\",\n  \"body\": \"We will be upgrading servers at 2am UTC.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/api/admin/announcements",
+            "description": "**201** with announcement payload. `body` up to 65535 chars."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — contact submissions",
+      "description": "Messages from `POST /api/contact`. **Bearer + `is_admin`**. Plain JSON.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "List contact submissions",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/contact-submissions?page=1&per_page=20",
+            "description": "Newest first by id."
+          }
+        },
+        {
+          "name": "Get contact submission",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{auth_token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": "{{base_url}}/api/admin/contact-submissions/{{admin_contact_submission_id}}",
+            "description": "Full message and timestamps."
           }
         }
       ]
