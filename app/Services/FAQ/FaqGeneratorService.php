@@ -137,7 +137,7 @@ class FaqGeneratorService
         });
     }
 
-    protected function generateFaqsInternal(string $url, ?string $topic, array $options, string $sourceHash, string $cacheKey): FaqResponseDTO
+    protected function generateFaqsInternal(?string $url, ?string $topic, array $options, string $sourceHash, string $cacheKey): FaqResponseDTO
     {
         if ($topic !== null && trim((string) $topic) !== '' && ! array_key_exists('enable_keywords', $options)) {
             $options['enable_keywords'] = true;
@@ -1147,6 +1147,7 @@ class FaqGeneratorService
         }
 
         if ($lastError !== JSON_ERROR_NONE) {
+            $cleaned = $json;
             $cleaned = preg_replace('/```\s*$/', '', $cleaned);
             $cleaned = trim($cleaned);
             $data = json_decode($cleaned, true);
@@ -1495,13 +1496,16 @@ class FaqGeneratorService
 
             if ($alsoAskedService->isAvailable()) {
                 $searchQuery = $this->buildSearchQuery($url, $topic);
+                $languageCode = $options['language_code'] ?? config('services.faq.default_language', 'en');
+                $locationCode = (int) ($options['location_code'] ?? config('services.faq.default_location', 2840));
+                $region = $this->mapLocationCodeToRegion($locationCode);
 
                 if (! empty($searchQuery)) {
                     $termsArray = [$searchQuery];
                     $alsoAskedSearchId = $alsoAskedService->createAsyncSearchJob(
                         $termsArray,
-                        'en',
-                        'us',
+                        $languageCode,
+                        $region,
                         2
                     );
                 }

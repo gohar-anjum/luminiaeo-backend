@@ -134,7 +134,7 @@ return [
     ],
 
     'alsoasked' => [
-        'base_url' => env('ALSOASKED_BASE_URL', 'https://alsoaskedapi.com/v1'),
+        'base_url' => env('ALSOASKED_BASE_URL', env('ALSOASKED_API_BASE_URL', 'https://alsoaskedapi.com/v1')),
         'api_key' => env('ALSOASKED_API_KEY'),
         'timeout' => env('ALSOASKED_TIMEOUT', 30),
         'cache_ttl' => env('ALSOASKED_CACHE_TTL', 86400),

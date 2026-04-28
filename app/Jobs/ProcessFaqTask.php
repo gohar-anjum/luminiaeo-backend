@@ -122,19 +122,39 @@ class ProcessFaqTask implements ShouldQueue
     {
         $task->refresh();
         if ($this->isAlsoAskedPhaseResolved($task)) {
+            \Illuminate\Support\Facades\Log::info('FAQ task AlsoAsked already resolved', [
+                'task_id' => $task->id,
+                'alsoasked_search_id' => $task->alsoasked_search_id,
+                'status' => $task->status,
+            ]);
             return true;
         }
 
+        \Illuminate\Support\Facades\Log::info('FAQ task polling AlsoAsked', [
+            'task_id' => $task->id,
+            'alsoasked_search_id' => $task->alsoasked_search_id,
+            'status' => $task->status,
+        ]);
         $searchResults = $alsoAskedService->getSearchResults($task->alsoasked_search_id);
 
         if (! $searchResults) {
             $attempts = (int) (($task->options ?? [])['_alsoasked_null_results'] ?? 0);
+            \Illuminate\Support\Facades\Log::warning('FAQ task AlsoAsked returned empty/null results', [
+                'task_id' => $task->id,
+                'alsoasked_search_id' => $task->alsoasked_search_id,
+                'attempts' => $attempts + 1,
+                'max_attempts' => self::ALSOASKED_NULL_RETRY_MAX,
+            ]);
             if ($attempts + 1 >= self::ALSOASKED_NULL_RETRY_MAX) {
                 $opts = $task->options ?? [];
                 unset($opts['_alsoasked_null_results']);
                 $task->update([
                     'alsoasked_questions' => [],
                     'options' => $opts,
+                ]);
+                \Illuminate\Support\Facades\Log::error('FAQ task AlsoAsked max null retries reached; marking empty', [
+                    'task_id' => $task->id,
+                    'alsoasked_search_id' => $task->alsoasked_search_id,
                 ]);
 
                 return true;
@@ -148,6 +168,11 @@ class ProcessFaqTask implements ShouldQueue
         }
 
         $status = $searchResults['status'] ?? 'unknown';
+        \Illuminate\Support\Facades\Log::info('FAQ task AlsoAsked poll status', [
+            'task_id' => $task->id,
+            'alsoasked_search_id' => $task->alsoasked_search_id,
+            'status' => $status,
+        ]);
 
         if ($status === 'running') {
             $opts = $task->options ?? [];
@@ -177,6 +202,12 @@ class ProcessFaqTask implements ShouldQueue
                 'alsoasked_questions' => $paaQuestions,
                 'options' => $opts,
             ]);
+            \Illuminate\Support\Facades\Log::info('FAQ task AlsoAsked resolved', [
+                'task_id' => $task->id,
+                'alsoasked_search_id' => $task->alsoasked_search_id,
+                'status' => $status,
+                'paa_questions_count' => count($paaQuestions),
+            ]);
 
             return true;
         }
@@ -184,6 +215,11 @@ class ProcessFaqTask implements ShouldQueue
         $task->update([
             'alsoasked_questions' => [],
             'options' => $opts,
+        ]);
+        \Illuminate\Support\Facades\Log::warning('FAQ task AlsoAsked resolved with unsupported status', [
+            'task_id' => $task->id,
+            'alsoasked_search_id' => $task->alsoasked_search_id,
+            'status' => $status,
         ]);
 
         return true;

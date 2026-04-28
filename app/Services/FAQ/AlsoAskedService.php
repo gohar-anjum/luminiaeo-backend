@@ -118,6 +118,11 @@ class AlsoAskedService
     public function createAsyncSearchJob(array $terms, string $language = 'en', string $region = 'us', int $depth = 2): ?string
     {
         if (empty($this->apiKey)) {
+            Log::warning('AlsoAsked async search skipped: missing API key', [
+                'language' => $language,
+                'region' => $region,
+                'depth' => $depth,
+            ]);
             return null;
         }
 
@@ -134,6 +139,14 @@ class AlsoAskedService
         ];
 
         try {
+            Log::info('AlsoAsked async search request', [
+                'endpoint' => $endpoint,
+                'terms' => $terms,
+                'language' => $language,
+                'region' => $region,
+                'depth' => $depth,
+            ]);
+
             // Reduced timeout since async mode should return immediately
             $response = Http::timeout(10)
                 ->withHeaders([
@@ -145,10 +158,18 @@ class AlsoAskedService
                 ->post($endpoint, $payload);
 
             if ($response->failed()) {
+                Log::warning('AlsoAsked async search failed', [
+                    'status' => $response->status(),
+                    'body' => mb_substr($response->body(), 0, 1000),
+                ]);
                 return null;
             }
 
             $data = $response->json();
+            Log::info('AlsoAsked async search response', [
+                'status' => $response->status(),
+                'response' => $data,
+            ]);
             
             // In async mode, API should return job ID immediately
             if (isset($data['id'])) {
@@ -165,9 +186,15 @@ class AlsoAskedService
                 return $data['id'];
             }
 
+            Log::warning('AlsoAsked async search returned no job id', [
+                'response' => $data,
+            ]);
             return null;
 
         } catch (\Exception $e) {
+            Log::error('AlsoAsked async search exception', [
+                'message' => $e->getMessage(),
+            ]);
             return null;
         }
     }
@@ -175,12 +202,20 @@ class AlsoAskedService
     public function getSearchResults(string $searchId): ?array
     {
         if (empty($searchId) || !is_string($searchId)) {
+            Log::warning('AlsoAsked getSearchResults skipped: invalid search id', [
+                'search_id' => $searchId,
+            ]);
             return null;
         }
 
         $endpoint = $this->baseUrl . '/search/' . $searchId;
 
         try {
+            Log::info('AlsoAsked polling request', [
+                'search_id' => $searchId,
+                'endpoint' => $endpoint,
+            ]);
+
             $response = Http::timeout(10)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -190,19 +225,28 @@ class AlsoAskedService
                 ->get($endpoint);
 
             if ($response->failed()) {
+                Log::warning('AlsoAsked polling failed', [
+                    'search_id' => $searchId,
+                    'status' => $response->status(),
+                    'body' => mb_substr($response->body(), 0, 1000),
+                ]);
                 return null;
             }
 
             $data = $response->json();
             
-            // Log AlsoAsked API response
             Log::info('AlsoAsked API Response', [
                 'search_id' => $searchId,
+                'http_status' => $response->status(),
                 'response' => $data,
             ]);
 
             return $data;
         } catch (\Exception $e) {
+            Log::error('AlsoAsked polling exception', [
+                'search_id' => $searchId,
+                'message' => $e->getMessage(),
+            ]);
             return null;
         }
     }
