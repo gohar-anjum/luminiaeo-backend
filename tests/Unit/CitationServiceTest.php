@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Interfaces\CitationRepositoryInterface;
 use App\Services\CitationService;
+use App\Services\FAQ\FaqGeneratorService;
 use App\Services\LLM\LLMClient;
 use Mockery;
 use Tests\TestCase;
@@ -20,10 +21,11 @@ class CitationServiceTest extends TestCase
             ->zeroOrMoreTimes();
 
         $repository = Mockery::mock(CitationRepositoryInterface::class)->shouldIgnoreMissing();
+        $faq = Mockery::mock(FaqGeneratorService::class)->shouldIgnoreMissing();
 
-        $service = new CitationService($repository, $llm);
+        $service = new CitationService($repository, $llm, $faq);
 
-        $queries = $service->generateQueries('https:
+        $queries = $service->generateQueries('https://example.com', 150);
 
         $this->assertCount(150, $queries);
         $this->assertEquals(150, count(array_unique($queries)));

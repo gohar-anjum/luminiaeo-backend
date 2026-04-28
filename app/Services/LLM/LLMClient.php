@@ -82,8 +82,15 @@ class LLMClient
         while (count($collected) < $count && $attempts < $maxAttempts) {
             $remaining = $count - count($collected);
             $currentBatch = min($batchSize, $remaining);
+            $parsedUrl = parse_url($url) ?: [];
+            $host = isset($parsedUrl['host']) ? strtolower((string) $parsedUrl['host']) : '';
+            $host = $host !== '' ? preg_replace('/^www\./', '', $host) : '';
+            $pathTail = isset($parsedUrl['path']) ? trim((string) $parsedUrl['path'], '/') : '';
+            $pathHint = $pathTail === '' ? 'homepage — no URL path segments' : 'path: /'.$pathTail;
             $replace = [
                 'url' => $url,
+                'domain' => $host !== '' ? $host : '(unknown)',
+                'path_hint' => $pathHint,
                 'N' => (string) $currentBatch,
             ];
             $system = $this->replacer->replace($template['system'] ?? '', $replace);

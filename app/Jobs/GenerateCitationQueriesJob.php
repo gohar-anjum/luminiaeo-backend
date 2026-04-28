@@ -43,24 +43,22 @@ class GenerateCitationQueriesJob implements ShouldQueue
         }
 
         try {
-            // Fetch queries from FAQ sources (SERP + AlsoAsked), same pipeline as FAQ generator
-            $queries = $service->fetchQueriesFromFaqSources($this->url, null, $this->numQueries);
+            $queries = $service->generateQueries($this->url, $this->numQueries);
 
             if (empty($queries)) {
-                Log::warning('No questions from SERP or AlsoAsked for citation task', [
+                Log::warning('Citation task: LLM returned no queries', [
                     'task_id' => $task->id,
                     'url' => $this->url,
                 ]);
                 $repository->update($task, [
                     'status' => CitationTask::STATUS_FAILED,
                     'meta' => array_merge($task->meta ?? [], [
-                        'error' => 'No questions found from SERP or AlsoAsked. Ensure SERP and AlsoAsked services are configured.',
+                        'error' => 'No queries could be generated. Configure OPENAI_API_KEY and/or GOOGLE_API_KEY (Gemini) for citations (config/citations.php) and ensure at least one provider is available.',
                     ]),
                 ]);
                 return;
             }
 
-            // Cap to requested count (FAQ source may return fewer)
             $queries = array_slice(array_values($queries), 0, $this->numQueries);
 
             // Update task with queries and queue processing
@@ -72,18 +70,18 @@ class GenerateCitationQueriesJob implements ShouldQueue
             // Dispatch processing job
             ProcessCitationTaskJob::dispatch($task->id);
 
-            Log::info('Citation queries fetched from SERP/AlsoAsked and processing queued', [
+            Log::info('Citation queries generated via LLM; processing queued', [
                 'task_id' => $task->id,
                 'queries_count' => count($queries),
             ]);
         } catch (\Exception $e) {
-            Log::error('Failed to fetch citation queries from SERP/AlsoAsked', [
+            Log::error('Citation query generation (LLM) failed', [
                 'task_id' => $task->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            $service->recordFailure($task, 'Query fetch from SERP/AlsoAsked failed: ' . $e->getMessage());
+            $service->recordFailure($task, 'LLM query generation failed: '.$e->getMessage());
         }
     }
 }

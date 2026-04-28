@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Jobs\ProcessCitationTaskJob;
+use App\Jobs\GenerateCitationQueriesJob;
 use App\Models\User;
 use App\Services\LLM\LLMClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,12 +29,12 @@ class CitationControllerTest extends TestCase
         $user = User::factory()->create();
 
         $response = $this->actingAs($user, 'sanctum')->postJson('/api/citations/analyze', [
-            'url' => 'https:
+            'url' => 'https://example.com',
         ]);
 
         $response->assertStatus(202)->assertJsonStructure(['task_id', 'status', 'message']);
 
-        Queue::assertPushed(ProcessCitationTaskJob::class);
+        Queue::assertPushed(GenerateCitationQueriesJob::class);
     }
 
     private function fakeQueries(int $count): array

@@ -98,8 +98,7 @@ class CitationService
     }
 
     /**
-     * Fetch queries from FAQ sources (SERP + AlsoAsked) for citation checking.
-     * Uses the same question pipeline as the FAQ generator; no LLM query generation.
+     * Fetch queries from FAQ sources (SERP + AlsoAsked). Optional; not used by the default citation analyze flow.
      */
     public function fetchQueriesFromFaqSources(string $url, ?string $topic = null, int $maxQueries = 500): array
     {
@@ -118,7 +117,7 @@ class CitationService
     }
 
     /**
-     * Generate queries via LLM (legacy; citation flow now uses fetchQueriesFromFaqSources).
+     * Generate citation check queries via Gemini/OpenAI (see resources/prompts/citation/query_generation).
      */
     public function generateQueries(string $url, int $numQueries): array
     {
