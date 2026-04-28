@@ -16,6 +16,7 @@ class AlsoAskedService
     protected int $cacheTTL;
     protected KeywordCacheRepositoryInterface $cacheRepository;
     protected ApiCacheService $apiCacheService;
+    protected static bool $apiKeyFingerprintLogged = false;
 
     public function __construct(KeywordCacheRepositoryInterface $cacheRepository, ?ApiCacheService $apiCacheService = null)
     {
@@ -126,6 +127,8 @@ class AlsoAskedService
             return null;
         }
 
+        $this->logApiKeyFingerprintOnce();
+
         $endpoint = $this->baseUrl . '/search';
 
         $payload = [
@@ -211,6 +214,7 @@ class AlsoAskedService
         $endpoint = $this->baseUrl . '/search/' . $searchId;
 
         try {
+            $this->logApiKeyFingerprintOnce();
             Log::info('AlsoAsked polling request', [
                 'search_id' => $searchId,
                 'endpoint' => $endpoint,
@@ -613,5 +617,26 @@ class AlsoAskedService
     protected function getCacheKey(string $term, string $language, string $region, int $depth): string
     {
         return 'alsoasked:' . md5(strtolower($term) . '|' . $language . '|' . $region . '|' . $depth);
+    }
+
+    protected function logApiKeyFingerprintOnce(): void
+    {
+        if (self::$apiKeyFingerprintLogged || empty($this->apiKey)) {
+            return;
+        }
+
+        $key = (string) $this->apiKey;
+        $prefix = substr($key, 0, 6);
+        $suffix = strlen($key) > 10 ? substr($key, -4) : '';
+        $masked = $suffix !== '' ? $prefix.'***'.$suffix : $prefix.'***';
+
+        Log::warning('AlsoAsked API key fingerprint', [
+            'masked_key' => $masked,
+            'sha256_12' => substr(hash('sha256', $key), 0, 12),
+            'length' => strlen($key),
+            'base_url' => $this->baseUrl,
+        ]);
+
+        self::$apiKeyFingerprintLogged = true;
     }
 }
