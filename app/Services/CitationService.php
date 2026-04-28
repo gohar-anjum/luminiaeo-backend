@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Domain\Billing\Contracts\WalletServiceInterface;
 use App\DTOs\CitationRequestDTO;
 use App\Interfaces\CitationRepositoryInterface;
 use App\Jobs\CitationChunkJob;
@@ -10,6 +11,7 @@ use App\Jobs\ProcessCitationTaskJob;
 use App\Models\CitationTask;
 use App\Services\FAQ\FaqGeneratorService;
 use App\Services\LLM\LLMClient;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -18,28 +20,37 @@ class CitationService
     public function __construct(
         protected CitationRepositoryInterface $repository,
         protected LLMClient $llmClient,
-        protected FaqGeneratorService $faqGeneratorService
+        protected FaqGeneratorService $faqGeneratorService,
+        protected WalletServiceInterface $walletService
     ) {
     }
 
     public function createTask(CitationRequestDTO $dto, ?int $creditReservationId = null): CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($dto->url);
-        
-        $lockKey = 'citation:lock:' . md5($normalizedUrl);
+
+        $userId = Auth::id();
+        $lockKey = 'citation:lock:'.md5((string) ($userId ?? '').'|'.$normalizedUrl);
         $timeout = config('cache_locks.citations.timeout', 60);
-        
-        return Cache::lock($lockKey, $timeout)->get(function () use ($normalizedUrl, $dto, $creditReservationId) {
+
+        return Cache::lock($lockKey, $timeout)->get(function () use ($normalizedUrl, $dto, $creditReservationId, $userId) {
             $cacheDays = config('citations.cache_days', 30);
-            $existingTask = $this->repository->findCompletedByUrl($normalizedUrl, $cacheDays);
 
-            if ($existingTask) {
-                return $existingTask;
-            }
+            if ($userId !== null) {
+                $existingTask = $this->repository->findCompletedByUrlForUser($normalizedUrl, $userId, $cacheDays);
 
-            $inProgressTask = $this->repository->findInProgressByUrl($normalizedUrl);
-            if ($inProgressTask) {
-                return $inProgressTask;
+                if ($existingTask) {
+                    $this->reverseUnusedReservation($creditReservationId);
+
+                    return $existingTask;
+                }
+
+                $inProgressTask = $this->repository->findInProgressByUrlForUser($normalizedUrl, $userId);
+                if ($inProgressTask) {
+                    $this->reverseUnusedReservation($creditReservationId);
+
+                    return $inProgressTask;
+                }
             }
 
             $max = config('citations.max_queries');
@@ -524,6 +535,26 @@ class CitationService
         }
 
         return array_values(array_unique(array_map(fn ($token) => str_replace('-', ' ', $token), $keywords)));
+    }
+
+    /**
+     * When analyze returns a cached or in-flight task, no new work was scheduled; refund the
+     * credits reserved by {@see DeductCreditsMiddleware} for this HTTP request.
+     */
+    protected function reverseUnusedReservation(?int $creditReservationId): void
+    {
+        if ($creditReservationId === null) {
+            return;
+        }
+
+        try {
+            $this->walletService->reverseReservation($creditReservationId);
+        } catch (\Throwable $e) {
+            Log::warning('Citation: failed to reverse unused credit reservation', [
+                'credit_transaction_id' => $creditReservationId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
 }

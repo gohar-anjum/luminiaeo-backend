@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Domain\Billing\Contracts\WalletServiceInterface;
 use App\Interfaces\CitationRepositoryInterface;
 use App\Services\CitationService;
 use App\Services\FAQ\FaqGeneratorService;
@@ -22,8 +23,9 @@ class CitationServiceTest extends TestCase
 
         $repository = Mockery::mock(CitationRepositoryInterface::class)->shouldIgnoreMissing();
         $faq = Mockery::mock(FaqGeneratorService::class)->shouldIgnoreMissing();
+        $wallet = Mockery::mock(WalletServiceInterface::class)->shouldIgnoreMissing();
 
-        $service = new CitationService($repository, $llm, $faq);
+        $service = new CitationService($repository, $llm, $faq, $wallet);
 
         $queries = $service->generateQueries('https://example.com', 150);
 

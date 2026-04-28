@@ -94,11 +94,12 @@ class CitationRepository implements CitationRepositoryInterface
         });
     }
 
-    public function findCompletedByUrl(string $url, ?int $cacheDays = null): ?CitationTask
+    public function findCompletedByUrlForUser(string $url, int $userId, ?int $cacheDays = null): ?CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($url);
 
         $query = CitationTask::where('url', $normalizedUrl)
+            ->where('user_id', $userId)
             ->where('status', CitationTask::STATUS_COMPLETED)
             ->orderBy('created_at', 'desc');
 
@@ -109,11 +110,12 @@ class CitationRepository implements CitationRepositoryInterface
         return $query->first();
     }
 
-    public function findInProgressByUrl(string $url): ?CitationTask
+    public function findInProgressByUrlForUser(string $url, int $userId): ?CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($url);
 
         return CitationTask::where('url', $normalizedUrl)
+            ->where('user_id', $userId)
             ->whereIn('status', [
                 CitationTask::STATUS_GENERATING,
                 CitationTask::STATUS_QUEUED,
