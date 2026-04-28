@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\GenerateCitationQueriesJob;
+use App\Models\CitationTask;
 use App\Models\User;
 use App\Services\LLM\LLMClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -32,9 +33,30 @@ class CitationControllerTest extends TestCase
             'url' => 'https://example.com',
         ]);
 
-        $response->assertStatus(202)->assertJsonStructure(['task_id', 'status', 'message']);
+        $response->assertStatus(202)
+            ->assertJsonPath('response.reused_existing_task', false);
 
         Queue::assertPushed(GenerateCitationQueriesJob::class);
+    }
+
+    public function test_analyze_reuses_completed_task_for_same_url(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        CitationTask::factory()->for($user)->completed()->create([
+            'url' => 'https://example.com',
+            'created_at' => now()->subDays(5),
+        ]);
+
+        $response = $this->actingAs($user, 'sanctum')->postJson('/api/citations/analyze', [
+            'url' => 'https://example.com/',
+        ]);
+
+        $response->assertStatus(202)
+            ->assertJsonPath('response.reused_existing_task', true);
+
+        Queue::assertNotPushed(GenerateCitationQueriesJob::class);
     }
 
     private function fakeQueries(int $count): array

@@ -25,7 +25,10 @@ class CitationService
     ) {
     }
 
-    public function createTask(CitationRequestDTO $dto, ?int $creditReservationId = null): CitationTask
+    /**
+     * @return array{task: CitationTask, reused_existing_task: bool}
+     */
+    public function createTask(CitationRequestDTO $dto, ?int $creditReservationId = null): array
     {
         $normalizedUrl = $this->normalizeUrl($dto->url);
 
@@ -37,19 +40,34 @@ class CitationService
             $cacheDays = config('citations.cache_days', 30);
 
             if ($userId !== null) {
-                $existingTask = $this->repository->findCompletedByUrlForUser($normalizedUrl, $userId, $cacheDays);
+                $uid = (int) $userId;
+                $existingTask = $this->repository->findCompletedByUrlForUser($normalizedUrl, $uid, $cacheDays);
 
                 if ($existingTask) {
                     $this->reverseUnusedReservation($creditReservationId);
 
-                    return $existingTask;
+                    Log::info('Citation analyze: reused completed task', [
+                        'user_id' => $uid,
+                        'task_id' => $existingTask->id,
+                        'normalized_url' => $normalizedUrl,
+                        'released_reservation_id' => $creditReservationId,
+                    ]);
+
+                    return ['task' => $existingTask, 'reused_existing_task' => true];
                 }
 
-                $inProgressTask = $this->repository->findInProgressByUrlForUser($normalizedUrl, $userId);
+                $inProgressTask = $this->repository->findInProgressByUrlForUser($normalizedUrl, $uid);
                 if ($inProgressTask) {
                     $this->reverseUnusedReservation($creditReservationId);
 
-                    return $inProgressTask;
+                    Log::info('Citation analyze: reused in-progress task', [
+                        'user_id' => $uid,
+                        'task_id' => $inProgressTask->id,
+                        'normalized_url' => $normalizedUrl,
+                        'released_reservation_id' => $creditReservationId,
+                    ]);
+
+                    return ['task' => $inProgressTask, 'reused_existing_task' => true];
                 }
             }
 
@@ -57,7 +75,7 @@ class CitationService
             $numQueries = min(max($dto->numQueries, 1), $max);
 
             $attributes = [
-                'user_id' => \Illuminate\Support\Facades\Auth::id(),
+                'user_id' => Auth::id(),
                 'url' => $normalizedUrl,
                 'status' => CitationTask::STATUS_GENERATING,
                 'meta' => [
@@ -73,7 +91,7 @@ class CitationService
 
             GenerateCitationQueriesJob::dispatch($task->id, $normalizedUrl, $numQueries);
 
-            return $task->fresh();
+            return ['task' => $task->fresh(), 'reused_existing_task' => false];
         });
     }
 

@@ -6,13 +6,10 @@ use App\DTOs\CitationRequestDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CitationAnalyzeRequest;
 use App\Interfaces\CitationRepositoryInterface;
-use App\Models\CitationTask;
 use App\Services\ApiResponseModifier;
 use App\Services\CitationService;
 use App\Traits\HasApiResponse;
 use App\Traits\ValidatesResourceOwnership;
-use Illuminate\Http\Request;
-
 class CitationController extends Controller
 {
     use HasApiResponse, ValidatesResourceOwnership;
@@ -32,16 +29,22 @@ class CitationController extends Controller
         $reservation = $request->attributes->get('credit_reservation');
         $creditReservationId = $reservation['transaction_id'] ?? null;
 
-        $task = $this->citationService->createTask($dto, $creditReservationId);
+        $created = $this->citationService->createTask($dto, $creditReservationId);
+        $task = $created['task'];
+        $reuse = $created['reused_existing_task'];
+        $message = $reuse
+            ? 'Returning your existing citation task for this URL. Any credit reserved only for this request was released.'
+            : 'Queries generated and citation checks are queued. Poll '.route('citations.status', $task->id).' for progress, then use '.route('citations.results', $task->id).' when completed.';
 
         return $this->responseModifier
             ->setData([
                 'task_id' => $task->id,
                 'status' => $task->status,
+                'reused_existing_task' => $reuse,
                 'status_url' => route('citations.status', $task->id),
                 'results_url' => route('citations.results', $task->id),
             ])
-            ->setMessage('Queries generated and citation checks are queued. Poll ' . route('citations.status', $task->id) . ' for progress, then use ' . route('citations.results', $task->id) . ' when completed.')
+            ->setMessage($message)
             ->setResponseCode(202)
             ->response();
     }

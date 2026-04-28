@@ -97,6 +97,7 @@ class CitationRepository implements CitationRepositoryInterface
     public function findCompletedByUrlForUser(string $url, int $userId, ?int $cacheDays = null): ?CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($url);
+        $userId = (int) $userId;
 
         $query = CitationTask::where('url', $normalizedUrl)
             ->where('user_id', $userId)
@@ -113,6 +114,7 @@ class CitationRepository implements CitationRepositoryInterface
     public function findInProgressByUrlForUser(string $url, int $userId): ?CitationTask
     {
         $normalizedUrl = $this->normalizeUrl($url);
+        $userId = (int) $userId;
 
         return CitationTask::where('url', $normalizedUrl)
             ->where('user_id', $userId)
