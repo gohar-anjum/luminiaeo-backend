@@ -234,7 +234,7 @@ class ProcessFaqTask implements ShouldQueue
     {
         return array_filter(
             $options,
-            static fn (mixed $_, int|string $k): bool => ! str_starts_with((string) $k, '_'),
+            static fn (int|string $k): bool => ! str_starts_with((string) $k, '_'),
             ARRAY_FILTER_USE_KEY
         );
     }
