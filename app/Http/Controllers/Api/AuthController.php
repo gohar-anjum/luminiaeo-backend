@@ -10,12 +10,12 @@ use App\Http\Requests\ResetPasswordRequest;
 use App\Mail\PasswordResetMail;
 use App\Models\User;
 use App\Services\ApiResponseModifier;
-use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
@@ -59,7 +59,17 @@ class AuthController extends Controller
             'email' => $validated['email'],
             'password' => $validated['password'],
         ]);
-        event(new Registered($user));
+
+        try {
+            // Send immediately on signup (same mechanism as resend endpoint).
+            $user->sendEmailVerificationNotification();
+        } catch (\Throwable $e) {
+            Log::error('Failed to send verification email after signup', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         $signupBonus = (int) config('billing.signup_bonus_credits', 10);
         if ($signupBonus > 0) {
