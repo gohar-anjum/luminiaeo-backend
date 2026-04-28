@@ -64,6 +64,14 @@ class LLMClient
         $count = min(max($count, 1), config('citations.max_queries', 5000));
         $batchSize = max(50, config('citations.query_generation.max_per_call', 250));
 
+        Log::info('[Citation LLM] Query generation: provider availability', [
+            'openai_ready' => $this->canUseProvider('openai'),
+            'gemini_ready' => $this->canUseProvider('gemini'),
+            'openai_model' => config('citations.openai.model'),
+            'gemini_model' => config('citations.gemini.model'),
+            'note' => 'First successful provider wins per batch (openai preferred).',
+        ]);
+
         $template = $this->prompts->load('citation/query_generation');
         $userTemplate = $template['user'] ?: "Target URL: {{ url }}\nRequested Queries: {{ N }}\nReturn a JSON array of unique search queries.";
 
@@ -120,10 +128,13 @@ class LLMClient
                 $provider === 'gemini' && empty(config('citations.gemini.api')) => 'missing_GOOGLE_API_KEY',
                 default => 'unknown',
             };
-            Log::warning('Provider skipped for citation batch (no HTTP call)', [
+            Log::warning('[Citation LLM] Provider skipped — no outbound HTTP request', [
                 'provider' => $provider,
+                'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
                 'reason' => $reason,
-                'hint' => 'set env and run php artisan config:clear',
+                'hint' => 'set OPENAI_API_KEY / GOOGLE_API_KEY (citations.php) and run php artisan config:clear',
+                'target_url' => $targetUrl,
+                'queries_count' => count($queries),
             ]);
 
             return [];
@@ -136,6 +147,18 @@ class LLMClient
         $targetDomain = $this->normalizeDomain($targetUrl);
         $batchSize = max(1, config('citations.validation.batch_size', 25));
         $alias = $this->providerAlias($provider);
+        $model = $provider === 'openai'
+            ? (config('citations.openai.model') ?: 'gpt-4o')
+            : (config('citations.gemini.model') ?: 'gemini-1.5-pro');
+
+        Log::info('[Citation LLM] Starting batch validation for provider', [
+            'provider' => $provider,
+            'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+            'model' => $model,
+            'target_url' => $targetUrl,
+            'queries_total' => count($queries),
+            'validation_batch_size' => $batchSize,
+        ]);
 
         $results = [];
 
@@ -160,6 +183,14 @@ class LLMClient
             ];
 
             try {
+                Log::info('[Citation LLM] Outbound HTTP call (validation)', [
+                    'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                    'model' => $model,
+                    'target_url' => $targetUrl,
+                    'chunk_queries' => count($chunk),
+                ]);
+
                 $raw = $this->sendWithProvider($provider, $messages, ['temperature' => 0.1]);
                 $text = $this->extractTextFromRaw($raw, $provider);
 
@@ -211,10 +242,20 @@ class LLMClient
 
                 $results = array_replace($results, $parsed);
                 $this->breaker->clearFailures($provider);
+
+                Log::info('[Citation LLM] Validation chunk parsed successfully', [
+                    'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                    'parsed_rows' => count($parsed),
+                    'chunk_queries' => count($chunk),
+                ]);
             } catch (\Throwable $e) {
                 $this->breaker->recordFailure($provider);
-                Log::error('Citation batch validation failed', [
+                Log::error('[Citation LLM] Validation HTTP/API failed after outbound call', [
                     'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                    'model' => $model ?? null,
+                    'target_url' => $targetUrl,
                     'error' => $e->getMessage(),
                 ]);
 
@@ -521,16 +562,32 @@ class LLMClient
     {
         foreach ($this->preferredProviders() as $provider) {
             if (! $this->canUseProvider($provider)) {
+                Log::info('[Citation LLM] Query generation: provider skipped', [
+                    'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                    'reason' => 'not_configured_or_missing_credentials',
+                ]);
+
                 continue;
             }
 
             try {
+                Log::info('[Citation LLM] Query generation outbound HTTP call', [
+                    'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                ]);
+
                 $raw = $this->sendWithProvider($provider, $messages, [
                     'temperature' => 0.4,
                     'response_format' => ['type' => 'json_object'],
                 ]);
 
                 $this->breaker->clearFailures($provider);
+
+                Log::info('[Citation LLM] Query generation succeeded', [
+                    'provider' => $provider,
+                    'label' => $provider === 'openai' ? 'ChatGPT_OpenAI' : 'Gemini',
+                ]);
 
                 return [
                     'provider' => $provider,

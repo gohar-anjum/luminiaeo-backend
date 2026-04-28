@@ -53,6 +53,7 @@ class CitationChunkJob implements ShouldQueue
             'chunk_size' => count($this->chunk),
             'offset' => $this->offset,
             'total_queries' => $this->totalQueries,
+            'hint' => 'Confirm each provider with logs tagged [Citation LLM] Outbound HTTP call (validation)',
         ]);
 
         $results = [];
