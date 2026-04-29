@@ -70,7 +70,7 @@ class BacklinksRepository implements BacklinksRepositoryInterface
             $items = $resultSet['items'] ?? [];
 
             // Transaction 1: Create task and store initial backlinks
-            [$seoTask, $backlinks] = DB::transaction(function () use ($normalizedDomain, $limit, $items, $taskId) {
+            [$seoTask, $backlinks] = DB::transaction(function () use ($normalizedDomain, $limit, $items, $taskId, $userId) {
                 $seoTask = SeoTask::create([
                     'user_id' => $userId,
                     'task_id' => $taskId,
